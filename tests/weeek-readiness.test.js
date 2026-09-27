@@ -22,7 +22,7 @@ function listTools(home) {
 test('not connected → only weeek_status / weeek_set_token; static catalog has everything', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'weeek-'));
   const { ready, all } = listTools(home);
-  assert.deepEqual(ready.sort(), ['weeek_set_token', 'weeek_status']);
+  assert.deepEqual(ready.filter(n => n.startsWith('weeek_')).sort(), ['weeek_set_token', 'weeek_status']);
   assert.ok(all.includes('weeek_create_deal') && all.includes('weeek_list_contacts'));
 });
 

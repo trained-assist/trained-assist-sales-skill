@@ -6,10 +6,16 @@ release (after the MCP contract check), `src/browser.js` adds it to each session
 and core reads `src/prompt-domains/*.md` for the prompt rules.
 
 ## Contents
-- `src/mcp-skills/tools/30-weeek.js` — Weeek CRM (deals, contacts, tasks, comments); moved from core.
-- `src/prompt-domains/weeek.md`, `weeek.setup.md` — prompt rules (gated by the module's readiness).
+- `30-weeek.js` — Weeek CRM (deals, contacts, tasks, comments)
+- `85-expo.js` … `89-expo-pipeline-run.js`, `92-flexi-sales.js` — exhibition participants → targets → sales catalog (Flexi); `expo-paths.js`, `src/catalog-template/`
+- `40-company.js`, `70-inn-enrichment.js` (+ `src/inn-pipeline/`), `71-dadata.js`, `72-checko.js` — company / INN data (also used by recruiting)
+- `src/prompt-domains/` — `weeek`, `weeek.setup`, `expo`, `flexi-sales`
 
-Next (planned): expo / Flexi sales pipeline, then company/INN data tools.
+Profile skills: core's catalog addresses these modules as `sales-skills/<file>`; the registry
+skips modules listed in `SKILLS_RESOLVED` → `hidden.modules`.
+
+Scheduling: `expo_pipeline_run auto_cron` reports "schedules unavailable" until core's
+cron-service lands (trained-assist-agent#1489); then use core's provider jobs API.
 
 ## Develop
 ```bash
