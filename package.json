@@ -1,0 +1,12 @@
+{
+  "name": "trained-assist-sales-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sales / CRM domain skill (Weeek CRM; expo/Flexi next) — MCP server mounted by trained-assist-agent as the sales-skills sibling",
+  "main": "src/mcp-skills/index.js",
+  "scripts": {
+    "check": "node -e \"require('fs').readdirSync('src/mcp-skills/tools').forEach(f => require('./src/mcp-skills/tools/'+f))\" && node --check src/mcp-skills/index.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": { "node": ">=20" }
+}
