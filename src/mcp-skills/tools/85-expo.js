@@ -276,7 +276,7 @@ module.exports = {
       description: 'Активирует скилы выставочного пайплайна (Expo + Flexi). После активации доступны: expo_find_participants, expo_classify_targets, expo_pipeline_*, flexi_* и другие инструменты для работы с выставками.',
       inputSchema: { type: 'object', properties: {} },
       handler: async () => {
-        const flagDir = path.join(process.cwd(), 'contexts', 'expo');
+        const flagDir = path.dirname(require('../expo-paths.js').expoFlagPath());
         fs.mkdirSync(flagDir, { recursive: true });
         fs.writeFileSync(path.join(flagDir, '.enabled'), JSON.stringify({ enabled_at: new Date().toISOString() }));
         return { status: 'enabled', message: 'Expo/Flexi скилы активированы. Теперь доступны все инструменты для работы с выставками.' };

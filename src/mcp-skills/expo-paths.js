@@ -75,8 +75,17 @@ function expoConfigDir(workDir) {
 
 // Flag-based gate: expo/flexi tools are only registered when this flag exists.
 // Created by expo_enable tool in 85-expo.js.
-function isExpoEnabled() {
-  return fs.existsSync(path.join(process.cwd(), 'contexts', 'expo', '.enabled'));
+// The flag is PROFILE state (contexts/ lives in the profile root, like context_set):
+// a session or durable plan step runs with cwd = its project folder, so reading it
+// from process.cwd() alone hid every expo/flexi tool inside a project (#1752).
+// cwd is still accepted for a legacy flag written before this fix.
+function expoFlagPath(workDir = process.cwd()) {
+  return path.join(profileRoot(workDir), 'contexts', 'expo', '.enabled');
 }
 
-module.exports = { profileRoot, activeExpoProject, expoDataDir, expoDeployDir, expoConfigDir, isExpoEnabled };
+function isExpoEnabled(workDir = process.cwd()) {
+  return fs.existsSync(expoFlagPath(workDir))
+    || fs.existsSync(path.join(workDir, 'contexts', 'expo', '.enabled'));
+}
+
+module.exports = { profileRoot, activeExpoProject, expoDataDir, expoDeployDir, expoConfigDir, isExpoEnabled, expoFlagPath };
