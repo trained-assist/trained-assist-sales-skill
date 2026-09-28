@@ -168,7 +168,7 @@ Parameters:
             with_revenue: withRev.length,
           },
           deploy_cmd: deployCmd,
-          next_step: `Каталог собран (${exArray.length} компаний, ${targets.length} целевых).\nЗадеплой:\n${deployCmd}`,
+          next_step: `Каталог собран (${exArray.length} компаний, ${targets.length} целевых).\nЗадеплой: expo_deploy_catalog(expo_id="${id}") — на сервере; самому wrangler не запускать (у агента нет учётки Cloudflare).`,
         };
       },
     },

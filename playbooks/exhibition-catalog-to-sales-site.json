@@ -161,7 +161,7 @@
       "steps": [
         {
           "title": "Задеплоить каталог и записать рабочий URL в site-url.txt",
-          "instructions": "Только после того, как сайт собран и проверен. Способ: expo_deploy_catalog либо `npx wrangler pages deploy SLUG --project-name SLUG` из exhibitions/exhibitions/. После успеха записать единственный рабочий URL (вида https://<eventkey>-....pages.dev) в файл site-url.txt в корне рабочей директории — по нему идёт приёмка следующей стадии. Пуш ветки → PR; в main напрямую не коммитить.",
+          "instructions": "Только после того, как сайт собран и проверен. Способ: expo_deploy_catalog либо site_deploy(dir, project) для собранной вручную папки сайта. Самому запускать `npx wrangler` нельзя — у агента нет учётки Cloudflare, деплой идёт на сервере. После успеха записать единственный рабочий URL (вида https://<eventkey>-....pages.dev) в файл site-url.txt в корне рабочей директории — по нему идёт приёмка следующей стадии. Пуш ветки → PR; в main напрямую не коммитить.",
           "execution_kind": "programmatic",
           "validation": { "file_exists": "site-url.txt" }
         }
