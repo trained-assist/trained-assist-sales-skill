@@ -51,7 +51,7 @@ Steps (auto-detected which ones are needed):
 IMPORTANT USAGE PATTERN:
 - Call once to start. Check next_action in the response:
   • "call_again" — enrichment in progress, call again with same params to continue
-  • "done" — full pipeline complete, site built, deploy with deploy_cmd
+  • "done" — full pipeline complete, site built, publish with site_deploy(deploy.dir, deploy.project)
   • "create_cron" — too many companies to finish in one session, suggest cron to user
 
 When next_action == "call_again", simply call expo_pipeline_run again with identical params.
@@ -61,8 +61,8 @@ The tool resumes from where it stopped — no data loss.
 Причина: скрипты в /tmp теряют данные при перезапуске VM. Этот инструмент сохраняет
 на диск после каждого батча и умеет продолжить с места остановки.
 
-Для задач > 50 компаний используй auto_deploy: true — каталог деплоится на Cloudflare Pages
-после каждого батча, данные доступны по URL даже если сессия прервётся.
+Публикация — отдельным вызовом site_deploy(dir, project) (trained-skills): сессия не имеет
+учётки Cloudflare, публикует сервер.
 
 For hands-free completion without user interaction, create a cron:
   cron_create with schedule "every 10 minutes" and prompt:
@@ -81,12 +81,11 @@ For hands-free completion without user interaction, create a cron:
         max_batches:   { type: 'number', description: 'Макс. батчей за один вызов (default 2)', default: 2 },
         production_okved: { type: 'array', items: { type: 'string' }, description: 'ОКВЭД-префиксы производства для t:1/nt:1. Default: ["13.","14."] (текстиль). Для цветов: ["01.","16.","20.","22.","23.","25.","26.","27.","28.","32."]' },
         auto_cron: { type: 'boolean', description: 'Если true и осталось >5 батчей — автоматически создать крон-задачу на каждые 10 минут для продолжения. По умолчанию false.', default: false },
-        auto_deploy: { type: 'boolean', description: 'Если true — деплоить каталог на Cloudflare Pages после каждого батча. Данные доступны по URL даже если VM упадёт. Рекомендуется для задач > 50 компаний.', default: false },
-        project_name: { type: 'string', description: 'Имя Cloudflare Pages проекта для авто-деплоя (default: expo_id slug)' },
+        project_name: { type: 'string', description: 'Имя Cloudflare Pages проекта для site_deploy (default: expo_id slug)' },
       },
     },
 
-    handler: async ({ expo_url, event_key, expo_title, catalog_base = '', favicon_emoji = '🌸', batch_size = 20, max_batches = 2, production_okved, auto_cron = false, auto_deploy = false, project_name }, ctx) => {
+    handler: async ({ expo_url, event_key, expo_title, catalog_base = '', favicon_emoji = '🌸', batch_size = 20, max_batches = 2, production_okved, auto_cron = false, project_name }, ctx) => {
       const workDir = ctx?.workDir || process.cwd();
       const expoId  = slugify(expo_url);
       // Project-aware: writes into the project's data/ when the session is bound
@@ -143,8 +142,6 @@ For hands-free completion without user interaction, create a cron:
       let lastBuiltPath = null;
 
       const buildTool   = require('./88-expo-catalog.js').tools.expo_build_catalog;
-      const deployTool  = require('./88-expo-catalog.js').tools.expo_deploy_catalog;
-      let lastDeployUrl = null;
 
       while (batchesDone < max_batches) {
         const result = await enrichTool.handler({
@@ -170,20 +167,6 @@ For hands-free completion without user interaction, create a cron:
           ...(production_okved ? { production_okved } : {}),
         }, ctx);
         if (!built.error) lastBuiltPath = built.outputPath;
-
-        // Deploy partial catalog if auto_deploy is enabled
-        if (auto_deploy && lastBuiltPath) {
-          const deployed = await deployTool.handler({
-            expo_id: expoId,
-            ...(project_name ? { project_name } : {}),
-          }, ctx);
-          if (!deployed.error) {
-            lastDeployUrl = deployed.url;
-            stepLog(`🌐 Частичный каталог задеплоен: ${lastDeployUrl} (${result.done}/${result.total} компаний)`);
-          } else {
-            stepLog(`⚠️ Деплой не удался: ${deployed.error}`);
-          }
-        }
 
         if (result.remaining === 0) break;
       }
@@ -212,7 +195,7 @@ For hands-free completion without user interaction, create a cron:
         const msg = [
           `⏳ Обработано ${enrichDone} из ${enrichTotal} компаний`,
           `Осталось: ${enrichRemaining} (≈ ${batchesLeft} батчей по ${batch_size})`,
-          lastDeployUrl ? `🌐 Каталог доступен онлайн: ${lastDeployUrl}` : (lastBuiltPath ? `🏗️ Частичный сайт обновлён: ${lastBuiltPath}` : ''),
+          lastBuiltPath ? `🏗️ Частичный сайт обновлён: ${lastBuiltPath}` : '',
           '',
           cronResult
             ? `✅ Крон-задача создана — пайплайн продолжится автоматически каждые 10 минут.`
@@ -229,7 +212,6 @@ For hands-free completion without user interaction, create a cron:
           step:          'inn_enrich_batch',
           progress:      { done: enrichDone, total: enrichTotal, remaining: enrichRemaining, pct: Math.round(enrichDone / enrichTotal * 100) },
           partial_site:  lastBuiltPath,
-          partial_url:   lastDeployUrl,
           message:       msg,
           cron_id:       cronResult?.id || null,
           cron_prompt:   offerCron ? `Продолжай вызывать expo_pipeline_run для ${expo_url} с event_key=${event_key} и expo_title="${expo_title}" пока next_action != "done". Вызывай каждые 10 минут.` : null,
@@ -263,18 +245,6 @@ For hands-free completion without user interaction, create a cron:
 
       stepLog(`✅ Сайт готов: ${built.outputPath}`);
 
-      // Final deploy if auto_deploy is enabled
-      if (auto_deploy) {
-        const deployed = await deployTool.handler({
-          expo_id: expoId,
-          ...(project_name ? { project_name } : {}),
-        }, ctx);
-        if (!deployed.error) {
-          lastDeployUrl = deployed.url;
-          stepLog(`🌐 Финальный каталог задеплоен: ${lastDeployUrl}`);
-        }
-      }
-
       const summary = [
         `✅ Пайплайн завершён для "${expo_title}"`,
         '',
@@ -282,9 +252,7 @@ For hands-free completion without user interaction, create a cron:
         `🔍 С ИНН: ${lastEnrichResult?.with_inn ?? '?'}`,
         !qualified.error ? `🎯 Целевых: ${qualified.qualified} | Почти целевых: —` : '',
         '',
-        lastDeployUrl
-          ? `🌐 Сайт: ${lastDeployUrl}`
-          : [`🚀 Задеплой сайт:`, built.deploy_cmd].join('\n'),
+        `🚀 Опубликуй: site_deploy(dir="${built.deploy.dir}", project="${project_name || built.deploy.project}")`,
       ].filter(s => s !== undefined).join('\n');
 
       return {
@@ -299,8 +267,7 @@ For hands-free completion without user interaction, create a cron:
           rejected:  qualified.rejected,
         },
         output_path: built.outputPath,
-        deploy_cmd:  built.deploy_cmd,
-        deployed_url: lastDeployUrl,
+        deploy:      { ...built.deploy, ...(project_name ? { project: project_name } : {}) },
         expo_id:     expoId,
         log,
       };
