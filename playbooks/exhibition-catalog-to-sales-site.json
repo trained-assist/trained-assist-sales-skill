@@ -1,0 +1,397 @@
+{
+  "id": "exhibition-catalog-to-sales-site",
+  "version": 1,
+  "scope": "system",
+  "title": "Продажи Flexi на выставке: ссылка → сайт → приёмка → сделки",
+  "goal_template": "{goal}",
+  "user_value_template": "Выставка доведена до рабочего состояния: участники обогащены и классифицированы по живому конфигу критериев, сайт-каталог задеплоен по ссылке из goal, приёмка (сделка / отказ / заметка / комментарий) пройдена на живом URL, тестовые сущности удалены, сделки и follow-up есть в Weeek, отчёт и известные ограничения озвучены.",
+  "defaults": {
+    "max_attempts": 3,
+    "execution_timeout_seconds": 900,
+    "recovery_policy": "default"
+  },
+  "stages": [
+    {
+      "id": "gates",
+      "title": "Гейты — без них тулов нет",
+      "steps": [
+        {
+          "title": "Проверить все предусловия и записать их в gates-report.md",
+          "instructions": "Проверь по порядку и запиши КАЖДЫЙ пункт строкой «<гейт>: ok|missing» в файл gates-report.md в корне рабочей директории (создай/перезапиши):\n1) секции skills.json профиля `flexi-expo` и `crm-weeek` включены — иначе expo_*/flexi_*/weeek_* скрыты (canary #1537);\n2) существует флаг `contexts/expo/.enabled` — без него все expo_* гейтятся isExpoEnabled();\n3) Weeek L1-токен установлен (weeek_status / weeek_set_token) — сделки, задачи, контакты, удаление;\n4) Weeek L2-сессия (/connect/weeek, логин+пароль) — нужна ТОЛЬКО для weeek_add_comment к сделке; если нет — строка «weeek_l2: missing», это не блокирует остальное;\n5) env агента содержит FLEXI_BOT_SECRET и FLEXI_API_URL (проверка: flexi_status → api_reachable);\n6) для НОВОЙ выставки: eventKey в шаблоне сайта (EVENT_KEY='eventnameyear'), eventKey в ALLOWED_ORIGINS и mapping в flexi-telegram-deal-bot, есть telegram_companies.json; для существующей — строка «event_key: ok (rosupack2026 и т.п.)».\nКритический гейт (п.1, 2, 3, 5) со статусом missing — не продолжай: сообщи владельцу, что именно включить, и остановись. Некритичные (L2, новый eventKey) зафиксируй и иди дальше.",
+          "execution_kind": "agent",
+          "executor_role": "verifier",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": {
+            "file_exists": "gates-report.md",
+            "gates_report_lists_each_required_gate": true
+          }
+        },
+        {
+          "title": "Машино-проверка: API заметок жив и Weeek-токен на месте",
+          "instructions": "Две детерминированные проверки без оценки моделью: /health воркера заметок отвечает 2xx и лежит сохранённый Weeek-токен. Если упала первая — FLEXI_API_URL/деплой воркера, вторая — weeek_set_token.",
+          "execution_kind": "programmatic",
+          "validation": {
+            "http_ok": "https://flexi-telegram-deal-bot.skillset-apply.workers.dev/health",
+            "credential_present": "weeek"
+          }
+        }
+      ]
+    },
+    {
+      "id": "discover",
+      "title": "Discover — найти каталог участников",
+      "steps": [
+        {
+          "title": "Найти страницу каталога участников и зафиксировать CATALOG_BASE",
+          "instructions": "Искать /participants, /exhibitors, /companies, /catalog; проверить digital-поддомены (catalog., digital., expo.), где лежат сайты/почты компаний; определить базу каталога и способ пагинации. Если каталог не найден — честное сообщение, а не выдуманный список. Быстрый путь для малых выставок: expo_pipeline_run целиком — но не больше 2 батчей ИНН за вызов (см. enrich).",
+          "execution_kind": "agent",
+          "executor_role": "researcher",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "catalog_source_found_and_base_fixed": true }
+        }
+      ]
+    },
+    {
+      "id": "scrape",
+      "title": "Scrape — спарсить список участников",
+      "steps": [
+        {
+          "title": "Скрапить и дедуплицировать список компаний в exhibitors.json",
+          "instructions": "Собрать имя бренда, стенд/секцию, href в digital-каталоге, страну. Поддержать Tilda T-Store API, HTML-страницы, JS-массив EX. Нормализовать имена (HTML-entities, lowercase, не-алфанум). Результат — exhibitors.json в директории данных пайплайна (в экспо-проекте это data/).",
+          "execution_kind": "programmatic",
+          "validation": { "command_exit_zero": "find . -maxdepth 4 -name exhibitors.json | grep -q ." }
+        }
+      ]
+    },
+    {
+      "id": "enrich",
+      "title": "Enrich — ИНН, финансы, сайт",
+      "steps": [
+        {
+          "title": "Обогатить компании через DaData и Checko в enriched.json",
+          "instructions": "По названию — ИНН через DaData (suggest/party); по ИНН — юрлицо, ОКВЭД, регион, статус, финансы и ОГРН через Checko; со страницы каталога — сайт и email. Параллельно с таймаутами. Недоступность API не валит прогон — компания остаётся кандидатом без ИНН. Для Checko-ссылки хранить ОГРН, не ИНН. Лимит: inn_enrich_batch / expo_pipeline_run — максимум 2 батча ИНН за один вызов; больше — повторными вызовами (иначе большая выставка встаёт).",
+          "execution_kind": "programmatic",
+          "validation": { "command_exit_zero": "find . -maxdepth 4 -name enriched.json | grep -q ." }
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "title": "Registry — санкции и официальный реестр (ДО классификации)",
+      "steps": [
+        {
+          "title": "Проверить каждую компанию по санкционным спискам и ЕГРЮЛ/ФНС",
+          "instructions": "Для каждой компании с ИНН/ОГРН определить registry_status (ok / sanctioned / not_found / inactive / unknown) и источник проверки; записать результат в файл registry-status.json в корне рабочей директории (массив {id, status, source}). Реестр недоступен — явный unknown, а не «молча ok». Выполняется СТРОГО ДО классификации target/near/not-target.",
+          "execution_kind": "programmatic",
+          "validation": { "file_exists": "registry-status.json" }
+        },
+        {
+          "title": "Разобрать пограничные реестровые совпадения",
+          "instructions": "При неоднозначном совпадении по названию/ИНН разобрать вручную: подтвердить или опровергнуть санкционную/недействующую связь. sanctioned и inactive не могут получить t:1 ни при каких условиях.",
+          "execution_kind": "agent",
+          "executor_role": "researcher",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "sanctioned_and_inactive_blocked_from_target": true }
+        }
+      ]
+    },
+    {
+      "id": "classify",
+      "title": "Classify — target / near-target / not-target",
+      "steps": [
+        {
+          "title": "Классифицировать по живому конфигу и сохранить targets.json",
+          "instructions": "Диапазоны выручки ЧИТАТЬ из expo_pipeline_get_site_config (менять их — только через expo_pipeline_set_site_config): их в этом плейбуке нет намеренно, чтобы он не спорил с конфигурацией. Тип: страна, ОКВЭД (13.x/14.x — производитель; 46.x/52.x/73.x — торговля/сервис), слова-маркеры. Жёсткие правила: NO INN = NO t:1; неизвестная выручка → nt:1; Belarus ≠ target; near_candidate максимум nt:1; реестровый sanctioned/inactive блокирует t:1. Результат закрепить expo_pipeline_qualify → targets.json.",
+          "execution_kind": "programmatic",
+          "validation": { "command_exit_zero": "find . -maxdepth 4 -name targets.json | grep -q ." }
+        },
+        {
+          "title": "Обосновать пограничные классификации",
+          "execution_kind": "agent",
+          "executor_role": "researcher",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "borderline_classification_justified": true }
+        }
+      ]
+    },
+    {
+      "id": "assemble",
+      "title": "Assemble — собрать EX-массив",
+      "steps": [
+        {
+          "title": "Собрать EX-массив и сохранить его в ex-array.json",
+          "instructions": "Для каждой компании — {id, n, t, nt, inn, ogrn, w, e, href, ru, rev, prof, ry} плюс реестровый статус (registry_status, источник). Файл ex-array.json в корне рабочей директории — источник для пересборки сайта, запись в него обязательна. b (описание) для целевых пишется на следующей стадии. ogrn обязателен для Checko-ссылки. expo_generate_ex_array: только bracket-matching write-back, никогда regex; текст должен заканчиваться `];`, не `]]`.",
+          "execution_kind": "programmatic",
+          "validation": { "file_exists": "ex-array.json" }
+        }
+      ]
+    },
+    {
+      "id": "site",
+      "title": "Site — построить HTML-сайт",
+      "steps": [
+        {
+          "title": "Собрать сайт из шаблона (bracket-match write-back)",
+          "instructions": "Скопировать шаблон, заменить title, CATALOG_BASE, EX-массив и футер (expo_build_catalog или ручной bracket-writeback). Обязательные фичи: isNear, фильтр «Почти целевые», near-badge, CSS-переменная --nrt, Checko-ссылка по ОГРН, filterHint/updateFilterHint. Результат — index.html в директории деплоя (в экспо-проекте deploy/<slug>/).",
+          "execution_kind": "programmatic",
+          "validation": { "command_exit_zero": "find . -maxdepth 4 -name index.html | grep -q ." }
+        },
+        {
+          "title": "Написать описания b для целевых компаний",
+          "instructions": "Для каждой t:1 и nt:1 — одна строка вида «Производство: [что], [город]. [1 фраза].» без маркетингового шума; данные брать из ex-array/enriched, не выдумывать.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "target_company_descriptions_written": true }
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "title": "Deploy — задеплоить сайт",
+      "steps": [
+        {
+          "title": "Задеплоить каталог и записать рабочий URL в site-url.txt",
+          "instructions": "Только после того, как сайт собран и проверен. Способ: expo_deploy_catalog либо `npx wrangler pages deploy SLUG --project-name SLUG` из exhibitions/exhibitions/. После успеха записать единственный рабочий URL (вида https://<eventkey>-....pages.dev) в файл site-url.txt в корне рабочей директории — по нему идёт приёмка следующей стадии. Пуш ветки → PR; в main напрямую не коммитить.",
+          "execution_kind": "programmatic",
+          "validation": { "file_exists": "site-url.txt" }
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "title": "Report — git-флоу и отчёт по пайплайну",
+      "steps": [
+        {
+          "title": "Открыть PR (никогда не коммитить в main)",
+          "instructions": "Feature-ветка → PR → merge → redeploy. В main напрямую не пушить.",
+          "execution_kind": "programmatic",
+          "validation": { "pr_opened": true }
+        },
+        {
+          "title": "Сверить отчёт: всего компаний, найдено ИНН, targets, URL",
+          "instructions": "Свести цифры из targets.json и site-url.txt: всего участников, сколько с ИНН, t:1/nt:1/not, ссылка на сайт. Противоречие между файлами и отчётом — разобраться до приёмки.",
+          "execution_kind": "agent",
+          "executor_role": "reviewer",
+          "minimum_model_level": "master",
+          "context_budget": "small",
+          "validation": { "report_numbers_consistent": true }
+        }
+      ]
+    },
+    {
+      "id": "acceptance",
+      "title": "Приёмка сайта «как клиент» — на живом URL",
+      "steps": [
+        {
+          "title": "B0. Проверить карточку компании на живом сайте",
+          "instructions": "Прочитать site-url.txt, открыть сайт, взять карточку целевой компании и убедиться, что есть: статус-бейдж (сделка / заметка / отказ), метка «ЦЕЛЕВАЯ»/«ИНТЕРЕС», ссылка Checko по ОГРН, выручка/прибыль, сайт компании, кнопки «✈ Создать сделку», «🎙 Заметка», «Отказ» / «↩ Отменить». Статусы подгружаются GET NOTES_API?eventKey&companyIds, приоритет статуса: deal > reject > note.",
+          "execution_kind": "agent",
+          "executor_role": "reviewer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "medium",
+          "validation": { "live_company_card_shows_required_elements": true }
+        },
+        {
+          "title": "B1. Сделка CRUD: создать → проверить → удалить",
+          "instructions": "weeek_create_deal (заголовок с маркером [ТЕСТ]) → weeek_get_deal подтверждает, что сделка есть → weeek_delete_deal → перечитать статусы (flexi_get_notes) и убедиться, что бейдж «сделка» снялся. Сделка в итоге должна быть удалена.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "test_deal_created_verified_and_deleted": true }
+        },
+        {
+          "title": "B2. Отказ на двух компаниях: поставить → проверитьpersist → снять",
+          "instructions": "flexi_reject_company на ДВУХ реальных компаниях (номер стенда как company_id) → flexi_get_notes по каждой: rejected=true и причина видна → у соседних карточек выручка/прибыль/сайт/описания не изменились → flexi_unreject_company по обеим → rejected=false. После шага отказа не должно остаться ни у одной компании.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": {
+            "two_rejects_persisted_then_cleared": true,
+            "other_cards_unaffected": true
+          }
+        },
+        {
+          "title": "B3. Заметка с маркером [ТЕСТ]: добавить → увидеть → удалить",
+          "instructions": "Контракт тестовых сущностей (обязателен): каждая тестовая заметка НАЧИНАЕТСЯ с маркера «[ТЕСТ]», чтобы её было видно как тест даже если удаление не пройдёт.\nПорядок: flexi_add_note(company_name, note_text=\"[ТЕСТ] приёмка <дата>\") → записать note_id из ответа → flexi_get_notes: заметка видна (на карточке и через API) → flexi_delete_note(note_id=<id>) → flexi_get_notes: note_count=0.\nЗапасной путь без id: flexi_delete_note(match=\"[ТЕСТ]\"). Без note_id и match инструмент отказывается удалять — это защита от случайного стирания боевых заметок.\nЕсли удаление не удалось — не продолжай приёмку: зафиксируй ошибку явно, заметка помечена [ТЕСТ] и должна быть удалена до конца шага.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": {
+            "test_note_added_and_retrieved": true,
+            "test_note_deleted_after_use": true
+          }
+        },
+        {
+          "title": "B4. Комментарий к сделке (требует Weeek L2)",
+          "instructions": "weeek_add_comment по тестовой сделке (L2-кука WEEEK_APP_COOKIE) → проверить сохранение. Если L2-сессии нет — честно записать «l2_unavailable» и не ретраить: публичного API комментариев к сделкам нет (404). Публичный API есть только к задачам (POST /tm/tasks/{id}/comments, 403 = права токена).",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "deal_comment_saved_or_l2_unavailable_recorded": true }
+        },
+        {
+          "title": "B5. Итог приёмки: тестового мусора не осталось",
+          "instructions": "Собрать по всем компаниям, где проводились тесты: flexi_get_notes_bulk → проверить, что тестовых сделок нет (weeek_list_deals без [ТЕСТ]-заголовков), отказы сняты (rejected=false), заметок с маркером [ТЕСТ] нет (flexi_delete_note(match=\"[ТЕСТ]\") вернул deleted=0). Всё, что не удалилось, — перечислить явно в ответе шага с причиной.",
+          "execution_kind": "agent",
+          "executor_role": "verifier",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "no_test_entities_left": true }
+        }
+      ]
+    },
+    {
+      "id": "telegram-deal",
+      "title": "Сделка из визитки через Telegram-бот",
+      "steps": [
+        {
+          "title": "C1. Deep-link с карточки ведёт в бота",
+          "instructions": "С карточки сайта «✈ Создать сделку» → deep-link вида https://t.me/cmr_management_bot?start=<eventKey>_deal_<companyId>. Проверить, что eventKey и companyId совпадают с карточкой.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "deep_link_matches_card": true }
+        },
+        {
+          "title": "C2. Отправить тестовую визитку и получить сделку",
+          "instructions": "В бот отправить визитку (фото или пересланный контакт) с пометкой [ТЕСТ] в источке/комментарии → бот распознаёт данные и создаёт сделку в Weeek, для companyId проставляется hasDeal. Имя и телефон брать из message.contact, не вычитывать regex-ом: переданный контакт без фамилии/латиница раньше падал (kobzevvv/flexi-exhibition-deal-bot#2). Заметки менеджера должны уходить в КОММЕНТАРИИ Weeek, а не в description сделки (тот же баг #2).",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "deal_created_from_bot_business_card": true }
+        },
+        {
+          "title": "C3. Проверить сохранение сделки и бейдж на сайте",
+          "instructions": "weeek_get_deal / weeek_list_deals: сделка существует, поля (имя/телефон/компания) корректны. На сайте — бейдж «сделка», flexi_get_notes возвращает has_deal=true. Ошибка апдейта сделки должна быть понятной фразой, а не сырым JSON (баг #3, safeErrorMessage).",
+          "execution_kind": "agent",
+          "executor_role": "verifier",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "bot_deal_verified_on_site_and_in_weeek": true }
+        },
+        {
+          "title": "C4. Удалить тестовую сделку и снять бейдж",
+          "instructions": "weeek_delete_deal по тестовой сделке [ТЕСТ] → перечитать статусы → бейдж «сделка» снялся, has_deal=false.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "test_bot_deal_deleted": true }
+        },
+        {
+          "title": "C5. Известные регрессы бота — прогнать, а не игнорировать",
+          "instructions": "Проверить четыре уже починенных места, чтобы рефреш деплоя их не вернул: (1) переданный контакт берётся из message.contact; (2) заметки менеджера попадают в комментарии Weeek, не в description; (3) ошибка обновления сделки человекочитаемая (safeErrorMessage, PR #3); (4) deep-link на созданную задачу открывает задачу (баг #4).",
+          "execution_kind": "agent",
+          "executor_role": "reviewer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "medium",
+          "validation": { "known_bot_regressions_checked": true }
+        }
+      ]
+    },
+    {
+      "id": "workflow",
+      "title": "Рабочий цикл на выставке (после приёмки)",
+      "steps": [
+        {
+          "title": "D1. Закрепить активную выставку",
+          "instructions": "flexi_set_exhibition(event_key) один раз — сохраняется в context store и переживает сессии. Дальше все flexi_* можно вызывать без event_key.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "active_exhibition_set": true }
+        },
+        {
+          "title": "D2. Обход целевых: кто в работе",
+          "instructions": "flexi_get_notes_bulk по номерам стендов целевых: у кого уже есть заметки, сделка, отказ — карта работы на стенд.",
+          "execution_kind": "agent",
+          "executor_role": "researcher",
+          "minimum_model_level": "bachelor",
+          "context_budget": "medium",
+          "validation": { "bulk_status_overview_built": true }
+        },
+        {
+          "title": "D3. Заметки и отказы по ходу работы",
+          "instructions": "По мере работы: flexi_add_note (боевые заметки — без маркера [ТЕСТ]), flexi_reject_company / flexi_unreject_company. company_id = номер стенда (A12) — один id = одна компания; стенда нет — название компании как id. Тестовые заметки — только с [ТЕСТ] и удалять их же flexi_delete_note.",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "medium",
+          "validation": { "notes_and_rejects_applied_per_convention": true }
+        },
+        {
+          "title": "D4. Сделки: бот или прямое создание, движение по воронке",
+          "instructions": "Сделка — через deep-link и визитку в боте (основной сценарий) либо weeek_create_deal. Движение: weeek_update_deal, follow-up: weeek_add_task(due_date). Комментарии к сделке — только при наличии L2 (см. ограничения).",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "master",
+          "context_budget": "medium",
+          "validation": { "deal_flow_progressed": true }
+        },
+        {
+          "title": "D5. Закрытие: успех или отказ с причиной",
+          "instructions": "Успех → статус сделки. Отказ → flexi_reject_company с причиной (+ заметка о причине).",
+          "execution_kind": "agent",
+          "executor_role": "developer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "small",
+          "validation": { "deals_closed_with_status": true }
+        },
+        {
+          "title": "D6. Отчёт по выставке",
+          "instructions": "Сколько целевых, сколько сделок в работе/выиграно, что осталось; дайджест необработанных прелидов. Опираться на flexi_get_notes_bulk и weeek_list_deals, не на память.",
+          "execution_kind": "agent",
+          "executor_role": "researcher",
+          "minimum_model_level": "master",
+          "context_budget": "large",
+          "validation": { "exhibition_report_generated": true }
+        }
+      ]
+    },
+    {
+      "id": "limitations",
+      "title": "Известные ограничения и итог",
+      "steps": [
+        {
+          "title": "Проговорить ограничения, а не прятать их",
+          "instructions": "Включить в итоговый ответ: (1) комментарии к сделкам Weeek — только через L2-куку WEEEK_APP_COOKIE, публичного API нет (404), артефакт удалять рано; (2) inn_enrich_batch / expo_pipeline_run — максимум 2 батча ИНН за вызов; (3) секции flexi-expo и crm-weeek по умолчанию OFF в skills.json (canary #1537) — включаются явно; (4) удаление заметок есть, но только для site_note/site_audio_note и только по note_id либо match — отказы снимаются flexi_unreject_company, сделки удаляются через Weeek; (5) токен MCP GitHub протухает, рабочий лежит в origin URL репо.",
+          "execution_kind": "agent",
+          "executor_role": "reviewer",
+          "minimum_model_level": "bachelor",
+          "context_budget": "medium",
+          "validation": { "known_limitations_listed": true }
+        },
+        {
+          "title": "Итоговый отчёт",
+          "instructions": "Свести: URL сайта (site-url.txt), всего участников / с ИНН / t:1 / nt:1 (targets.json), результат приёмки B0–B5 и C1–C5 (что пройдено, что l2_unavailable), состояние тестовых сущностей (удалены), сделки в Weeek, что осталось незакрытым.",
+          "execution_kind": "agent",
+          "executor_role": "reviewer",
+          "minimum_model_level": "master",
+          "context_budget": "large",
+          "validation": { "final_report_generated": true }
+        }
+      ]
+    }
+  ],
+  "hooks": {
+    "task_done": [
+      { "type": "notify", "to": "owner", "text": "Выставка доведена до рабочего состояния: {goal}" }
+    ],
+    "task_failed": [
+      { "type": "notify", "to": "owner", "text": "Плейбук по выставке застрял: {goal} — {error}" }
+    ]
+  }
+}

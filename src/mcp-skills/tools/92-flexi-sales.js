@@ -86,6 +86,20 @@ async function apiPost(fields) {
   }
 }
 
+async function apiDelete(params) {
+  const url = new URL(NOTES_API);
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') url.searchParams.set(k, String(v));
+  }
+  try {
+    const res = await fetch(url.toString(), { method: 'DELETE', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const json = await res.json();
+    return { httpStatus: res.status, ...json };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 function resolveEventKey(event_key) {
   return clean(event_key) || activeEventKey();
 }
@@ -175,7 +189,7 @@ module.exports = {
         const data = await apiGet({ eventKey, companyId: cid });
         if (!data.ok) return { error: `API вернул ошибку: ${data.error || data.httpStatus}` };
 
-        const notes = (data.notes || []).map(n => ({ text: n.text || '', at: n.createdAt || '' }));
+        const notes = (data.notes || []).map(n => ({ id: n.id || '', text: n.text || '', at: n.createdAt || '' }));
         return {
           event_key: eventKey,
           company_id: cid,
@@ -269,13 +283,67 @@ module.exports = {
         });
 
         if (!data.ok) return { error: `Ошибка API: ${data.error || JSON.stringify(data)}` };
+        const notes = data.notes || [];
         return {
           ok: true,
           company_id: cid,
           company_name,
           event_key: eventKey,
           prelead_id: data.preleadId,
-          note_count: (data.notes || []).length,
+          note_id: notes.at(-1)?.id || '',
+          note_count: notes.length,
+        };
+      },
+    },
+
+    flexi_delete_note: {
+      description:
+        'Удалить заметку с карточки компании на выставке (только заметки — отказ/сделка не удаляются).\n\n' +
+        'Передай note_id (id из flexi_add_note/flexi_get_notes) ИЛИ match — подстроку текста заметки ' +
+        '(напр. "[ТЕСТ]"). Указывать хотя бы одно ОБЯЗАТЕЛЬНО: без них ничего не удаляется.\n\n' +
+        'Тестовые заметки помечай маркером "[ТЕСТ]" в начале текста и удаляй их этой командой — ' +
+        'даже если удаление не пройдёт, на реальной карточке сразу видно, что это тест.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          company_id: { type: 'string', description: 'Номер стенда или id компании' },
+          company_name: { type: 'string', description: 'Название компании (если нет company_id)' },
+          note_id: { type: 'string', description: 'id конкретной заметки (из flexi_get_notes / flexi_add_note)' },
+          match: { type: 'string', description: 'Удалить все заметки, содержащие подстроку (напр. "[ТЕСТ]")' },
+          event_key: { type: 'string' },
+        },
+      },
+      handler: async ({ company_id, company_name, note_id, match, event_key }) => {
+        const eventKey = resolveEventKey(event_key);
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+
+        const cid = clean(company_id) || companyIdFromStand(company_name) || companyIdFromName(company_name || '');
+        if (!cid) return { error: 'Нужен company_id или company_name' };
+        const noteId = clean(note_id);
+        const matchText = clean(match);
+        if (!noteId && !matchText) {
+          return { error: 'Нужен note_id или match — вслепую заметки не удаляю' };
+        }
+
+        const data = await apiDelete({
+          eventKey,
+          companyId: cid,
+          ...(noteId ? { messageId: noteId } : {}),
+          ...(matchText ? { match: matchText } : {}),
+        });
+
+        if (!data.ok) return { error: `Ошибка API: ${data.error || JSON.stringify(data)}` };
+        return {
+          ok: true,
+          company_id: cid,
+          event_key: eventKey,
+          deleted: data.deleted || 0,
+          remaining_notes: (data.notes || []).length,
+          has_deal: data.hasDeal || false,
+          rejected: data.status?.rejected || false,
+          message: data.deleted
+            ? `Удалено заметок: ${data.deleted}. Осталось: ${(data.notes || []).length}.`
+            : 'Ничего не удалено — подходящих заметок не найдено (это не ошибка).',
         };
       },
     },

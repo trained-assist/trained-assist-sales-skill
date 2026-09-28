@@ -10,6 +10,11 @@ and core reads `src/prompt-domains/*.md` for the prompt rules.
 - `85-expo.js` … `89-expo-pipeline-run.js`, `92-flexi-sales.js` — exhibition participants → targets → sales catalog (Flexi); `expo-paths.js`, `src/catalog-template/`
 - `40-company.js`, `70-inn-enrichment.js` (+ `src/inn-pipeline/`), `71-dadata.js`, `72-checko.js` — company / INN data (also used by recruiting)
 - `src/prompt-domains/` — `weeek`, `weeek.setup`, `expo`, `flexi-sales`
+- `playbooks/exhibition-catalog-to-sales-site.json` — единый плейбук продаж на выставке
+  (гейты → пайплайн «ссылка → сайт» → приёмка → сделки из визитки → рабочий цикл → ограничения).
+  Core резолвит его как sibling-плейбук (нужен `trained-assist-sales-skill` в
+  `DEFAULT_SIBLING_REPOS`, trained-assist-agent#1728); контракт проверяет
+  `scripts/check-playbook-contract.js` в CI.
 
 Profile skills: core's catalog addresses these modules as `sales-skills/<file>`; the registry
 skips modules listed in `SKILLS_RESOLVED` → `hidden.modules`.

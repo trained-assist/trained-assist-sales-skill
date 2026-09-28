@@ -3,3 +3,4 @@ staging-results/
 *.log
 .env
 .DS_Store
+.core
