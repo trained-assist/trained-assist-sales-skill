@@ -6,8 +6,8 @@ module.exports = {
   expo: {
     label: 'Выставка',
     prefixes: ['expo', 'выставка', 'exhibition', 'экспо'],
-    // Shown to the project-classifier LLMs (core project-summary / reproject).
-    classifierHint: 'выставки/каталоги участников',
+    // User-selectable: shown to core's project-classifier LLMs and web project-create.
+    hint: 'выставки/каталоги участников',
     dirs: ['site', 'site/_archive', 'deploy', 'data'],
     seedFiles: {
       'EVENT.md':
