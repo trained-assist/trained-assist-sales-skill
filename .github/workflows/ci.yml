@@ -33,3 +33,8 @@ jobs:
       # exhibition, so the contract is checked here, next to the core checkout.
       - name: Playbook v1 contract
         run: node scripts/check-playbook-contract.js
+      # Valid is not enough: 2026-09-28 the exhibition playbook passed the contract, yet no
+      # prompt route led the agent to it. This checks the route from a plain request to
+      # playbook_run(<id>) (core issue #1756); --strict = the expo.md pointer must stay.
+      - name: Playbook reachability («доехал ли плейбук»)
+        run: node .core/scripts/check-playbook-reachability.mjs --repo . --all --strict
