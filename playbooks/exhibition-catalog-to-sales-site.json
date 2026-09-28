@@ -10,6 +10,10 @@
     "execution_timeout_seconds": 900,
     "recovery_policy": "default"
   },
+  "requires": {
+    "sections": ["flexi-expo", "crm-weeek"],
+    "tools": ["expo_pipeline_run", "expo_build_catalog", "expo_deploy_catalog", "inn_enrich_batch", "flexi_add_note", "flexi_get_notes_bulk", "flexi_delete_note", "weeek_create_deal", "weeek_list_deals"]
+  },
   "stages": [
     {
       "id": "gates",
