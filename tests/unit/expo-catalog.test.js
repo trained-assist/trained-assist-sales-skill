@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { mkdtempSync } from 'fs';
 import { createRequire } from 'module';
@@ -132,14 +132,15 @@ describe('expo_build_catalog', () => {
     expect(html).not.toContain('{{CATALOG_BASE}}');
   });
 
-  it('includes deploy_cmd in response', async () => {
+  it('points publishing at site_deploy, not wrangler', async () => {
     makeEnriched(SAMPLE_COMPANIES);
     const r = await expo_build_catalog.handler(
       { expo_id: 'test-expo', event_key: 'testexpo2026', expo_title: 'Test Expo 2026' },
       ctx()
     );
-    expect(r.deploy_cmd).toContain('wrangler pages deploy');
-    expect(r.deploy_cmd).toContain('test-expo');
+    expect(r.deploy).toEqual({ tool: 'site_deploy', dir: dirname(r.outputPath), project: 'test-expo' });
+    expect(r.next_step).toContain('site_deploy(');
+    expect(JSON.stringify(r)).not.toContain('wrangler');
   });
 });
 
@@ -150,5 +151,18 @@ describe('expo_deploy_catalog', () => {
     const r = await expo_deploy_catalog.handler({ expo_id: 'nonexistent' }, ctx());
     expect(r.error).toBeTruthy();
     expect(r.build_cmd).toBeTruthy();
+  });
+
+  it('hands a built catalog to site_deploy instead of running wrangler', async () => {
+    makeEnriched(SAMPLE_COMPANIES);
+    const built = await expo_build_catalog.handler(
+      { expo_id: 'test-expo', event_key: 'testexpo2026', expo_title: 'Test Expo 2026' },
+      ctx()
+    );
+    const r = await expo_deploy_catalog.handler({ expo_id: 'test-expo', project_name: 'testexpo2026-site' }, ctx());
+    expect(r.published).toBe(false);
+    expect(r.next_tool).toBe('site_deploy');
+    expect(r.args).toEqual({ dir: dirname(built.outputPath), project: 'testexpo2026-site' });
+    expect(JSON.stringify(r)).not.toContain('wrangler');
   });
 });

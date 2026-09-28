@@ -33,8 +33,8 @@ Reads enriched.json (or targets.json) from the expo pipeline directory, applies
 expo_generate_ex_array classification, injects the EX array into the HTML template,
 and writes index.html to the expo dir (or out_dir).
 
-After this, deploy with:
-  npx wrangler pages deploy <out_dir> --project-name <slug>
+After this, publish with the trained-skills tool site_deploy(dir=<out_dir>, project=<slug>)
+(the session has no Cloudflare credentials, so never run npx wrangler yourself).
 
 Use when user says: "сделай каталог", "собери сайт выставки", "создай каталог участников",
 "задеплой каталог", "собери index.html".
@@ -154,7 +154,7 @@ Parameters:
         const withInn = exArray.filter(e => e.inn);
         const withRev = exArray.filter(e => e.rev != null);
 
-        const deployCmd = `npx wrangler pages deploy "${outputDir}" --project-name "${id}"`;
+        const deploy = { tool: 'site_deploy', dir: outputDir, project: id };
 
         return {
           ok: true,
@@ -167,17 +167,17 @@ Parameters:
             with_inn: withInn.length,
             with_revenue: withRev.length,
           },
-          deploy_cmd: deployCmd,
-          next_step: `Каталог собран (${exArray.length} компаний, ${targets.length} целевых).\nЗадеплой:\n${deployCmd}`,
+          deploy,
+          next_step: `Каталог собран (${exArray.length} компаний, ${targets.length} целевых).\nОпубликуй: site_deploy(dir="${outputDir}", project="${id}")`,
         };
       },
     },
 
     expo_deploy_catalog: {
-      description: `Deploy an already-built expo catalog index.html to Cloudflare Pages.
-Run after expo_build_catalog. Uses npx wrangler pages deploy.
-
-Returns the deployed URL.`,
+      description: `Resolve where an already-built expo catalog lives and hand it to site_deploy.
+Does NOT publish by itself: publishing goes through the trained-skills tool
+site_deploy(dir, project), which uses the profile's own Cloudflare token or the
+shared default and guards project ownership. Call site_deploy with the returned args.`,
 
       inputSchema: {
         type: 'object',
@@ -192,7 +192,7 @@ Returns the deployed URL.`,
       handler: async ({ expo_id, out_dir, project_name }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
         const id = expo_id.startsWith('http') ? slugify(expo_id) : expo_id;
-        const deployDir = out_dir ? path.resolve(out_dir) : expoDeployDir(workDir, id);
+        const deployDir = out_dir ? path.resolve(workDir, out_dir) : expoDeployDir(workDir, id);
         const slug = project_name || id;
 
         const indexPath = path.join(deployDir, 'index.html');
@@ -203,27 +203,15 @@ Returns the deployed URL.`,
           };
         }
 
-        const { execSync } = require('child_process');
-        try {
-          const output = execSync(
-            `npx wrangler pages deploy "${deployDir}" --project-name "${slug}"`,
-            { cwd: workDir, timeout: 120_000, encoding: 'utf8', stdio: 'pipe' }
-          );
-          const urlMatch = output.match(/https:\/\/[^\s]+\.pages\.dev/);
-          const url = urlMatch ? urlMatch[0] : `https://${slug}.pages.dev`;
-          return {
-            ok: true,
-            url,
-            project_name: slug,
-            deploy_output: output.slice(-500),
-          };
-        } catch (e) {
-          return {
-            error: `Deploy failed: ${e.message}`,
-            stderr: e.stderr?.slice(-1000),
-            deploy_cmd: `npx wrangler pages deploy "${deployDir}" --project-name "${slug}"`,
-          };
-        }
+        // Publishing moved to the server-side site_deploy (agent #1774): the
+        // session process has no Cloudflare credentials after run isolation.
+        return {
+          ok: false,
+          published: false,
+          next_tool: 'site_deploy',
+          args: { dir: deployDir, project: slug },
+          next_step: `Каталог готов. Опубликуй: site_deploy(dir="${deployDir}", project="${slug}")`,
+        };
       },
     },
 
