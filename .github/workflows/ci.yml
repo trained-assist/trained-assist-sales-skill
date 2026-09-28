@@ -28,3 +28,8 @@ jobs:
           path: .core
       - name: Core MCP contract (deploy gate)
         run: node .core/scripts/check-mcp-conformance.js .
+      # This repo owns the Flexi sales playbook; a file that drifts from the
+      # Playbook v1 contract is silently dropped at resolution time on a live
+      # exhibition, so the contract is checked here, next to the core checkout.
+      - name: Playbook v1 contract
+        run: node scripts/check-playbook-contract.js
