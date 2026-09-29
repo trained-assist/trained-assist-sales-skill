@@ -6,27 +6,15 @@
 // Квота: ~50 запросов/сутки (бесплатный план).
 // /v2/finances — единственный endpoint с реальной выручкой, не /v2/company.
 
-const path = require('path');
-const fs   = require('fs');
-
 const BASE = 'https://api.checko.ru/v2';
 
-const USER_ID = process.env.USER_ID || '';
+const { readKeys } = require('../inn-keys');
 
-function readKey() {
-  const env = process.env.INN_CHECKO_KEY || process.env.CHECKO_KEY || null;
-  if (env) return env;
-  try {
-    const cfgPath = path.join(
-      require('../../data-paths').userWorkDir(USER_ID),
-      '.inn-config.json',
-    );
-    if (fs.existsSync(cfgPath)) {
-      const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      return c.checkoKey || null;
-    }
-  } catch { /**/ }
-  return null;
+const NO_KEY = 'Checko key not configured. Save your key with inn_set_checko_key.';
+
+// Same store and precedence as inn_* (user key > platform env).
+function readKey(userId) {
+  return readKeys(userId).checkoKey;
 }
 
 async function checkoGet(endpoint, inn, key, extraParams = {}) {
@@ -80,8 +68,8 @@ module.exports = { tools: {
     description: `List all available Checko API endpoints with descriptions.
 Use before checko_get to understand what data is available.`,
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
-      const key = readKey();
+    handler: async (_, ctx) => {
+      const key = readKey(ctx?.userId);
       return {
         note: 'Daily quota ~50 requests (free plan). /v2/finances is the main endpoint for revenue.',
         key_configured: !!key,
@@ -116,9 +104,9 @@ IMPORTANT: always use "finances" for revenue data, not "company" (company endpoi
         inn: { type: 'string', description: 'Company INN (10 digits)' },
       },
     },
-    handler: async ({ endpoint, inn }) => {
-      const key = readKey();
-      if (!key) return { error: 'Checko key not configured. Set INN_CHECKO_KEY env var or use inn_set_checko_key.' };
+    handler: async ({ endpoint, inn }, ctx) => {
+      const key = readKey(ctx?.userId);
+      if (!key) return { error: NO_KEY };
 
       let data;
       try { data = await checkoGet(endpoint, inn, key); }
@@ -160,9 +148,9 @@ Production OKVEDs: 01.x, 16.x, 20.x, 22.x, 23.x, 25.x, 26.x-28.x, 32.x`,
         okved: { type: 'string', description: 'Known OKVED code (if already have it). Otherwise fetched from company endpoint.' },
       },
     },
-    handler: async ({ inn, okved }) => {
-      const key = readKey();
-      if (!key) return { error: 'Checko key not configured.' };
+    handler: async ({ inn, okved }, ctx) => {
+      const key = readKey(ctx?.userId);
+      if (!key) return { error: NO_KEY };
 
       // Get finances
       let finData;

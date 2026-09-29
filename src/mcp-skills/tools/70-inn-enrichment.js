@@ -2,51 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { enrich } = require('../../inn-pipeline/index');
 
-const USER_ID = process.env.USER_ID || '';
-
-const CREDENTIAL_KEYS = ['dadataToken', 'dadataSecret', 'checkoKey', 'rusprofileCookie'];
-
-function userConfigPath(userId) {
-  return path.join(os.homedir(), 'agent-tokens', String(userId || USER_ID), 'inn', 'config.json');
-}
-
-function readRawConfig(userId) {
-  const file = userConfigPath(userId);
-  if (!fs.existsSync(file)) return {};
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; }
-}
-
-// Platform credentials from env vars (set via secrets.env / GCP Secret Manager)
-function platformConfig() {
-  return {
-    dadataToken:      process.env.INN_DADATA_TOKEN   || null,
-    dadataSecret:     process.env.INN_DADATA_SECRET  || null,
-    checkoKey:        process.env.INN_CHECKO_KEY      || null,
-    rusprofileCookie: process.env.INN_RUSPROFILE_COOKIE || null,
-  };
-}
-
-// Merge: user overrides platform. Track source per key.
-function readConfig(userId) {
-  const platform = platformConfig();
-  const user = readRawConfig(userId);
-  const _sources = {};
-  for (const k of CREDENTIAL_KEYS) {
-    if (user[k])          _sources[k] = 'user';
-    else if (platform[k]) _sources[k] = 'platform';
-  }
-  return { ...platform, ...user, _sources };
-}
-
-function writeConfig(userId, patch) {
-  const file = userConfigPath(userId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const current = readRawConfig(userId);
-  fs.writeFileSync(file, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8');
-}
+// One store for DaData/Checko/Rusprofile keys, shared with dadata_*/checko_*/company_*.
+const { readKeys: readConfig, writeKeys: writeConfig } = require('../inn-keys');
 
 module.exports = {
   tools: {

@@ -3,34 +3,17 @@
 // DaData API — прямой доступ для разовых запросов.
 // Для batch-обогащения используй inn_enrich_batch (70-inn-enrichment.js).
 
-const path = require('path');
-const fs   = require('fs');
-
 const BASE_SUGGEST  = 'https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/party';
 const BASE_FIND_ID  = 'https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party';
 const BASE_ADDR     = 'https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address';
 const BASE_CLEAN    = 'https://cleaner.dadata.ru/api/v1/clean/address';
 
-const USER_ID = process.env.USER_ID || '';
+const { readKeys } = require('../inn-keys');
 
-function readCreds() {
-  const token  = process.env.INN_DADATA_TOKEN  || process.env.DADATA_TOKEN  || null;
-  const secret = process.env.INN_DADATA_SECRET || process.env.DADATA_SECRET || null;
-
-  // user config fallback (same as 70-inn-enrichment)
-  if (!token) {
-    try {
-      const cfgPath = path.join(
-        require('../../data-paths').userWorkDir(USER_ID),
-        '.inn-config.json',
-      );
-      if (fs.existsSync(cfgPath)) {
-        const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-        return { token: c.dadataToken || null, secret: c.dadataSecret || null };
-      }
-    } catch { /**/ }
-  }
-  return { token, secret };
+// Same store and precedence as inn_* (user key > platform env).
+function readCreds(userId) {
+  const k = readKeys(userId);
+  return { token: k.dadataToken, secret: k.dadataSecret };
 }
 
 async function post(url, creds, body, timeout = 8_000) {
@@ -88,8 +71,8 @@ Use to find a company INN when you only know the name.`,
         },
       },
     },
-    handler: async ({ query, count = 5, status = '' }) => {
-      const creds = readCreds();
+    handler: async ({ query, count = 5, status = '' }, ctx) => {
+      const creds = readCreds(ctx?.userId);
       if (!creds.token) return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
 
       const body = { query, count: Math.min(count, 20) };
@@ -115,8 +98,8 @@ More reliable than dadata_suggest when you already have the INN.`,
         inn: { type: 'string', description: 'INN (10 digits) or OGRN (13 digits)' },
       },
     },
-    handler: async ({ inn }) => {
-      const creds = readCreds();
+    handler: async ({ inn }, ctx) => {
+      const creds = readCreds(ctx?.userId);
       if (!creds.token) return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
 
       let data;
@@ -142,9 +125,9 @@ mode=clean   — normalize and parse a single address into parts.`,
         count:   { type: 'number', description: 'Max suggestions (suggest mode only)', default: 3 },
       },
     },
-    handler: async ({ address, mode = 'suggest', count = 3 }) => {
-      const creds = readCreds();
-      if (!creds.token) return { error: 'DaData token not configured.' };
+    handler: async ({ address, mode = 'suggest', count = 3 }, ctx) => {
+      const creds = readCreds(ctx?.userId);
+      if (!creds.token) return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
 
       if (mode === 'clean') {
         let data;
