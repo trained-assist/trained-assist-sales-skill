@@ -2,14 +2,12 @@
 
 // Company enrichment skill (Russian companies)
 // Free: Rusprofile.ru web scraping — INN lookup, CEO, contacts, revenue
-// Optional: DaData API (paid) — stored in ~/agent-tokens/{USER_ID}/dadata
+// Optional: DaData API (paid) — one store with inn_*/dadata_* (see ../inn-keys.js)
 //
 // Rusprofile rate limit: ~1 req/sec. Responses cached in memory per process.
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
+const { readKeys, writeKeys } = require('../inn-keys');
 
 const USER_ID = process.env.USER_ID || '';
 const RUSPROFILE_BASE = 'https://www.rusprofile.ru';
@@ -29,14 +27,9 @@ function cacheSet(key, data) { _cache.set(key, { ts: Date.now(), data }); }
 
 // ── DaData token ──────────────────────────────────────────────────────────────
 
-function dadataTokenPath(userId) {
-  return path.join(os.homedir(), 'agent-tokens', String(userId || USER_ID), 'dadata');
-}
-
+// Same store and precedence as inn_*/dadata_* (user key > platform env).
 function readDadataToken(userId) {
-  const file = dadataTokenPath(userId);
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, 'utf8').trim() || null;
+  return readKeys(userId || USER_ID).dadataToken;
 }
 
 // ── Rusprofile HTML parsing helpers ───────────────────────────────────────────
@@ -312,9 +305,7 @@ module.exports = {
       handler: async ({ token, user_id }) => {
         const uid = user_id || USER_ID;
         if (!uid) return { error: 'No user_id' };
-        const file = dadataTokenPath(uid);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, token.trim(), { mode: 0o600 });
+        writeKeys(uid, { dadataToken: token.trim() });
         return { ok: true, message: 'DaData token saved.' };
       },
     },
