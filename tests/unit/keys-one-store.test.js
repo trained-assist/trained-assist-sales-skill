@@ -31,8 +31,11 @@ beforeAll(async () => {
   setEnv('USERS_DIR', path.join(SANDBOX, 'users'));
   setEnv('AGENT_TOKENS_DIR', path.join(SANDBOX, 'agent-tokens'));
   setEnv('AGENT_DATA_DIR', path.join(SANDBOX, 'agent-data'));
+  // Prod contract: the registry passes ctx.userId = process.env.USER_ID, and
+  // tool modules capture USER_ID at load — so the setter and the readers see one user.
+  setEnv('USER_ID', USER);
   for (const k of ['INN_DADATA_TOKEN', 'INN_DADATA_SECRET', 'DADATA_TOKEN',
-                   'INN_CHECKO_KEY', 'CHECKO_KEY', 'INN_RUSPROFILE_COOKIE']) {
+                   'DADATA_SECRET', 'INN_CHECKO_KEY', 'CHECKO_KEY', 'INN_RUSPROFILE_COOKIE']) {
     setEnv(k, undefined);
   }
 
