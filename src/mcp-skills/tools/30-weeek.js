@@ -2,33 +2,50 @@
 
 // Weeek CRM skill
 // Weeek.net REST API — permanent Bearer token (no session expiry).
-// Token stored in ~/agent-tokens/{USER_ID}/weeek as plain text.
+// Token stored in <AGENT_TOKENS_DIR>/{USER_ID}/weeek — read/written through the
+// credential store (legacy plaintext transparent, v2 envelope decrypted).
 // To get token: Weeek → Settings → API → Generate token.
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { tokensRoot } = require('../../data-paths');
+// Credential store (trained-assist-agent#1939): legacy plaintext passes through,
+// an encrypted `weeek` / `weeek-session` file is decrypted — a raw readFileSync
+// would hand back base64 garbage once CRED_ENCRYPTION_KEY is provisioned.
+const { readCredentialFile, writeCredentialFile } = require('../../credential-store');
 
 const USER_ID = process.env.USER_ID || '';
 const WEEEK_BASE = 'https://api.weeek.net/public/v1';
 
 // ── Token storage ─────────────────────────────────────────────────────────────
 
+function profileDir(userId) {
+  return path.join(tokensRoot(), String(userId || USER_ID));
+}
+
 function tokenPath(userId) {
-  return path.join(os.homedir(), 'agent-tokens', String(userId || USER_ID), 'weeek');
+  return path.join(profileDir(userId), 'weeek');
+}
+
+function sessionPath(userId) {
+  return path.join(profileDir(userId), 'weeek-session');
 }
 
 function readToken(userId) {
   const file = tokenPath(userId);
   if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, 'utf8').trim() || null;
+  // Encrypted file without CRED_ENCRYPTION_KEY (or an unreadable one): degrade
+  // to "no token" loudly — isReady() runs this on every tool listing, so it must
+  // never throw, and it must never return the base64 stub.
+  try { return readCredentialFile(file).trim() || null; }
+  catch (e) { console.warn('[weeek] cannot read the token %s: %s', file, e.message); return null; }
 }
 
 function writeToken(userId, token) {
-  const file = tokenPath(userId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, token.trim(), { mode: 0o600 });
+  // Encrypted when CRED_ENCRYPTION_KEY is set, plaintext with a warning when not.
+  writeCredentialFile(tokenPath(userId), token.trim());
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -63,9 +80,10 @@ async function weeekCall(apiPath, opts, userId) {
 const WEEEK_PRIVATE_BASE = 'https://api.weeek.net';
 
 function readSession(userId) {
-  const file = path.join(os.homedir(), 'agent-tokens', String(userId || USER_ID), 'weeek-session');
+  const file = sessionPath(userId);
   if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, 'utf8').trim() || null;
+  try { return readCredentialFile(file).trim() || null; }
+  catch (e) { console.warn('[weeek] cannot read the session %s: %s', file, e.message); return null; }
 }
 
 function parseWorkspaceId(cookieStr) {
@@ -131,6 +149,9 @@ async function weeekPrivateFetch(apiPath, { method = 'GET', body, cookie, userId
 // ── Tools ─────────────────────────────────────────────────────────────────────
 
 module.exports = {
+  // Storage helpers, exported for tests — the registry only reads
+  // `.tools`/`.isReady`/`.setupTools`, so extra exports here are inert.
+  tokenPath, sessionPath, readToken, writeToken, readSession,
   isReady: () => !!readToken(USER_ID),
   setupTools: ['weeek_status', 'weeek_set_token'],
 
