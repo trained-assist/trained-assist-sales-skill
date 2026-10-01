@@ -16,6 +16,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { tokensRoot, userWorkDir } = require('../data-paths');
+// Credential store (trained-assist-agent#1939): every credential file this
+// module reads (the store itself and the legacy locations) passes through it —
+// legacy plaintext transparent, a v2 envelope decrypted, a base64 stub never
+// returned as a key, a missing CRED_ENCRYPTION_KEY → plaintext with a warning.
+const { readCredentialFile, writeCredentialFile } = require('../credential-store');
 
 const CREDENTIAL_KEYS = ['dadataToken', 'dadataSecret', 'checkoKey', 'rusprofileCookie'];
 
@@ -25,12 +30,22 @@ function storePath(userId) {
   return path.join(tokensRoot(), uidOf(userId), 'inn', 'config.json');
 }
 
+// An encrypted file without CRED_ENCRYPTION_KEY must not surface as a silent
+// "no key": say so, then treat the credential as absent (never the stub).
+function warnIfEncrypted(e, file) {
+  if (e && e.code !== 'ENOENT' && /CRED_ENCRYPTION_KEY/.test(String(e && e.message))) {
+    console.warn('[inn-keys] %s: %s — treating the credential as absent', file, e.message);
+  }
+}
+
 function readJson(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { return {}; }
+  try { return JSON.parse(readCredentialFile(file)) || {}; }
+  catch (e) { warnIfEncrypted(e, file); return {}; }
 }
 
 function readPlain(file) {
-  try { return fs.readFileSync(file, 'utf8').trim() || null; } catch { return null; }
+  try { return readCredentialFile(file).trim() || null; }
+  catch (e) { warnIfEncrypted(e, file); return null; }
 }
 
 function readStore(userId) {
@@ -80,8 +95,9 @@ function readKeys(userId) {
 
 function writeKeys(userId, patch) {
   const file = storePath(userId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ ...readStore(userId), ...patch }, null, 2), { mode: 0o600 });
+  // Encrypted when CRED_ENCRYPTION_KEY is set, plaintext with a warning when not;
+  // it mkdir's `inn/` and writes mode 0600 itself.
+  writeCredentialFile(file, JSON.stringify({ ...readStore(userId), ...patch }, null, 2));
   fs.chmodSync(file, 0o600);
 }
 
