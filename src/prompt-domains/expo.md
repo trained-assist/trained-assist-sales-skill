@@ -10,3 +10,5 @@ Pipeline: `expo_find_participants(site_url)` (JS-rendered → fetch page → `ex
 - Revenue filter ranges: always read `expo_pipeline_get_site_config`; change via `expo_pipeline_set_site_config`.
 - New exhibition also needs: `EVENT_KEY='eventnameyear'` in JS, eventKey in flexi-telegram-deal-bot ALLOWED_ORIGINS + mapping, `telegram_companies.json`.
 - EX array: bracket-matching only, never regex; write back `text[:start] + json.dumps(ex) + ';' + text[end+2:]`; must end `];` not `]];`. Commit on `feature/SLUG` before running.
+- Where to save (paths relative to the profile workDir; moved from core's profile-layout skill, trained-assist-agent#1717): target requirements → `contexts/prompts/target_company_prompt.txt`; company card standard → `contexts/prompts/company_showcase_spec.txt`; exhibition deal → `contexts/exhibitions/{eventKey}/deals/{companyId}.json`; active exhibition → `contexts/flexi/active_exhibition.json`. Never write into the shared `flexi-consult` profile.
+- Prompt read order: `contexts/prompts/<file>.txt` → `contexts/<file>.txt` (backward compat) → `$USERS_DIR/flexi-consult/site-requirements-target.md` / `site-requirements-display.md` (fallback).
