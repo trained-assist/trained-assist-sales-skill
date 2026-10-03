@@ -12,6 +12,8 @@
 const fs   = require('fs');
 const path = require('path');
 const { isExpoEnabled } = require('../expo-paths.js');
+// One source of truth for event_key (issue #19): the deal tools validate against it.
+const { EVENT_NAMES, EVENT_KEYS, isKnownEvent, eventName } = require('../../sales/exhibitions');
 
 const NOTES_API = process.env.FLEXI_NOTES_API_URL
   || 'https://flexi-telegram-deal-bot.skillset-apply.workers.dev/api/site-predeal-notes';
@@ -103,14 +105,6 @@ async function apiDelete(params) {
 function resolveEventKey(event_key) {
   return clean(event_key) || activeEventKey();
 }
-
-const EVENT_NAMES = {
-  rosupack2026: 'RosUpack 2026', stonefair2026: 'Индустрия камня 2026',
-  oborot2026: 'ECOM Expo 2026', reindustry2026: 'ReIndustry Expo 2026',
-  interautomechanica2026: 'ИнтерАвтоМеханика 2026', avtobusexpo2026: 'АвтобусЭкспо 2026',
-  ipsa2026: 'IPSA 2026', cpmautumn2026: 'CPM Осень 2026',
-  textilesalon2026: 'Textile Salon 2026', otdykhleisure2026: 'ОТДЫХ Leisure 2026',
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 
