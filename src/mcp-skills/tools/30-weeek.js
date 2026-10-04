@@ -48,6 +48,87 @@ function writeToken(userId, token) {
   writeCredentialFile(tokenPath(userId), token.trim());
 }
 
+// ── Reference schema ─────────────────────────────────────────────────────────
+//
+// Решение владельца (sales-skill#19, 03.10.2026), по аналогии с рекрутингом
+// (`CANDIDATE_STATUSES` в trained-assist-hh-skill): **схема** — какие бывают
+// роли — живёт в коде и валидируется с `throw`. **Привязка** роли к ID опции
+// конкретного Weeek-workspace — в профиле, потому что ID у каждого workspace
+// свои. Полный справочник Weeek здесь не дублируется: он приходит с API
+// (`weeek_list_funnels` / `weeek_list_statuses`).
+
+const FUNNEL_ROLES = ['Сколково', 'Партнеры'];
+
+const STATUS_ROLES = [
+  'Лид', 'Сообщение для ЛПР отправлено', 'Ждем фидбэк от ЛПР',
+  'Планируем звонок/встречу', 'Назначен звонок/встреча', 'Проработка проекта',
+  'Принимают решение', 'Направлено КП / договор', 'Контрактование',
+  'Оплата аванса', 'Выиграно', 'Пауза', 'Не отвечают', 'Ожидание', 'Проиграно'
+];
+
+// Источники сделки. Раньше это были 21 константа `WEEEK_DEAL_SOURCE_OPTION_ID`
+// в wrangler.toml бота — то есть данные, лежавшие в коде и менявшиеся от
+// выставки к выставке. Теперь схема здесь, привязка — в профиле.
+const DEAL_SOURCE_ROLES = [
+  'Aquaflame 2026', 'DairyTech 2026', 'Константин Собольков', 'Ирина Егорова',
+  'Павел Иванов', 'Никита Дыбо', 'AIRVent 2026', 'ПродЭкспо 2026',
+  'Денис Шинкарев', 'Андрей Черноусов', '@Siebelv3', 'Саша Ташкевич',
+  'LingerieShow', 'Интерлакокраска', 'Agravia', 'Вебинар 21.05.2026',
+  'HeliRussia 2026', 'Электро 2026', 'metobr-expo.ru', 'RosUpack 2026',
+  'ReIndustry Expo 2026', 'ECOM Expo 2026'
+];
+
+const DEAL_TYPE_ROLES = ['direct', 'partner'];
+const DEAL_TYPE_LABELS = { direct: 'Прямые продажи', partner: 'Партнеры' };
+
+const REF_GROUPS = ['funnels', 'statuses', 'deal_sources', 'deal_types'];
+
+function refsPath(userId) {
+  return path.join(profileDir(userId), 'weeek-refs.json');
+}
+
+function readRefs(userId) {
+  const file = refsPath(userId);
+  if (!fs.existsSync(file)) return {};
+  try { return JSON.parse(readCredentialFile(file)) || {}; }
+  catch (e) { console.warn('[weeek] cannot read refs %s: %s', file, e.message); return {}; }
+}
+
+function writeRefs(userId, refs) {
+  writeCredentialFile(refsPath(userId), JSON.stringify(refs, null, 2));
+}
+
+function cleanRole(value) {
+  return String(value ?? '').trim();
+}
+
+/** Типизированная ошибка: роль есть в схеме, но не привязана к ID в профиле. */
+function requireRef(refs, group, role) {
+  const value = cleanRole(role);
+  if (!value) throw new Error(`weeek_set_refs: пустая роль в группе "${group}"`);
+  const bound = refs?.[group]?.[value];
+  if (!bound) {
+    throw new Error(
+      `weeek_set_refs: роль "${value}" из группы "${group}" не привязана к ID Weeek. ` +
+      `Вызови weeek_set_refs${refs?.[group] ? '' : ' (файл привязок отсутствует)'} и проверь, ` +
+      `что в справочнике Weeek есть опция с таким названием.`
+    );
+  }
+  return bound;
+}
+
+function roleIsKnown(group, role) {
+  const value = cleanRole(role);
+  const known = {
+    funnels: FUNNEL_ROLES,
+    statuses: STATUS_ROLES,
+    deal_sources: DEAL_SOURCE_ROLES,
+    deal_types: DEAL_TYPE_ROLES,
+  }[group];
+  if (!known) throw new Error(`weeek_set_refs: неизвестная группа "${group}" (ожидается одна из: ${REF_GROUPS.join(', ')})`);
+  return known.includes(value);
+}
+
 // ── HTTP ──────────────────────────────────────────────────────────────────────
 
 async function weeekFetch(path, { method = 'GET', body, token } = {}) {
@@ -205,6 +286,91 @@ module.exports = {
         const uid = user_id || USER_ID;
         const data = await weeekCall('/crm/funnels', {}, uid);
         return { funnels: data.funnels ?? [] };
+      },
+    },
+
+    // Привязка ролей к ID. Без неё агент не может ни создать сделку в нужной
+    // воронке, ни поставить источник: ID опций у каждого Weeek-workspace свои,
+    // а в коде скилла живёт только схема.
+    weeek_set_refs: {
+      description:
+        'Прочитать справочник Weeek (воронки, статусы) и сохранить привязку наших ролей к ID опций ' +
+        'в ~/agent-tokens/<profile>/weeek-refs.json. Вызывать после weeek_set_token и после любых ' +
+        'изменений воронок/статусов в Weeek. Непривязанные роли остаются в отчёте — их надо создать ' +
+        'в Weeek или выбрать другое название.',
+      inputSchema: { type: 'object', properties: { user_id: { type: 'string' } } },
+      handler: async ({ user_id } = {}) => {
+        const uid = user_id || USER_ID;
+        if (!uid) return { error: 'No user_id' };
+        const token = readToken(uid);
+        if (!token) return { error: 'Weeek token not set. Call weeek_set_token first.' };
+
+        const refs = readRefs(uid);
+        const report = { funnels: [], statuses: [], unmatched: [] };
+
+        // Воронки: GET /crm/funnels → [{ id, name }]
+        const funnelsData = await weeekFetch('/crm/funnels', { token });
+        const funnelByName = new Map((funnelsData.funnels ?? []).map(f => [String(f.name ?? '').trim(), f.id]));
+        refs.funnels = { ...(refs.funnels || {}) };
+        for (const role of FUNNEL_ROLES) {
+          const id = funnelByName.get(role);
+          if (id) { refs.funnels[role] = id; report.funnels.push({ role, id }); }
+          else report.unmatched.push({ group: 'funnels', role });
+        }
+
+        // Статусы: у каждой воронки свой набор, поэтому идём по привязанным воронкам.
+        refs.statuses = { ...(refs.statuses || {}) };
+        for (const funnelId of Object.values(refs.funnels)) {
+          const data = await weeekFetch(`/crm/funnels/${encodeURIComponent(funnelId)}/statuses`, { token });
+          const byName = new Map((data.statuses ?? []).map(s => [String(s.name ?? '').trim(), s.id]));
+          for (const role of STATUS_ROLES) {
+            const id = byName.get(role);
+            if (id) { refs.statuses[role] = id; report.statuses.push({ role, id }); }
+            else report.unmatched.push({ group: 'statuses', role });
+          }
+        }
+
+        // Источники и типы сделки — опции кастомных полей. Схема объявлена, но
+        // привязку они получают отдельно: справочник опций кастомных полей через
+        // публичный API не отдаётся, а дублировать 21 ID из wrangler.toml бота в
+        // код скилла решено не было (это данные, а не код).
+        refs.deal_sources = refs.deal_sources || {};
+        refs.deal_types = refs.deal_types || {};
+        for (const role of DEAL_SOURCE_ROLES) if (!refs.deal_sources[role]) report.unmatched.push({ group: 'deal_sources', role });
+        for (const role of DEAL_TYPE_ROLES) if (!refs.deal_types[role]) report.unmatched.push({ group: 'deal_types', role });
+
+        writeRefs(uid, refs);
+        return {
+          ok: true,
+          path: refsPath(uid),
+          bound: {
+            funnels: Object.keys(refs.funnels).length,
+            statuses: Object.keys(refs.statuses).length,
+            deal_sources: Object.keys(refs.deal_sources).length,
+            deal_types: Object.keys(refs.deal_types).length,
+          },
+          matched: report,
+          refs,
+        };
+      },
+    },
+
+    weeek_get_refs: {
+      description:
+        'Прочитать привязку ролей к ID Weeek из профиля. Возвращает всё, что привязано, ' +
+        'и отдельно — роли из схемы, которые ещё не привязаны (их нельзя использовать: ' +
+        'requireRef бросит типизированную ошибку).',
+      inputSchema: { type: 'object', properties: { user_id: { type: 'string' } } },
+      handler: async ({ user_id } = {}) => {
+        const uid = user_id || USER_ID;
+        if (!uid) return { error: 'No user_id' };
+        const refs = readRefs(uid);
+        const unbound = {};
+        for (const group of REF_GROUPS) {
+          const known = { funnels: FUNNEL_ROLES, statuses: STATUS_ROLES, deal_sources: DEAL_SOURCE_ROLES, deal_types: DEAL_TYPE_ROLES }[group];
+          unbound[group] = known.filter(role => !refs?.[group]?.[role]);
+        }
+        return { ok: true, path: refsPath(uid), refs, unbound, deal_type_labels: DEAL_TYPE_LABELS };
       },
     },
 
