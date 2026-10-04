@@ -229,10 +229,70 @@ async function weeekPrivateFetch(apiPath, { method = 'GET', body, cookie, userId
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
 
+// ── Контракт обязательных полей сделки (sales-skill#19, G7) ───────────────────
+//
+// Визард гарантировал заполнение полей: это был конечный автомат, который вёл
+// пользователя по кнопкам и не давал пропустить обязательное. Агент — нет: он
+// сам решает, какой тул вызвать, и может позвать create_deal с половиной полей.
+//
+// Поэтому контракт явный, а неполные данные дают типизированную ошибку, а не
+// сделку с дырявыми полями: менеджер не видит, что писал посетитель, и не
+// понимает, почему в сделке нет ИНН.
+//
+// Набор повторяет то, что бот считал обязательным (WEEEK_REQUIRE_* в его
+// wrangler.toml): компания, комментарий, контакт. Плюс источник и тип — без них
+// сделку не разобрать в воронке.
+const DEAL_REQUIRED_FIELDS = [
+  { key: 'status_id', label: 'статус (стадия воронки)' },
+  { key: 'title', label: 'название компании' },
+  { key: 'source', label: 'источник сделки' },
+  { key: 'deal_type', label: 'тип сделки (direct | partner)' },
+  { key: 'company_inn', label: 'ИНН компании' },
+  { key: 'deal_comment', label: 'комментарий к сделке' },
+  { key: 'contact_name', label: 'контактное лицо' },
+];
+
+const DEAL_TYPES = ['direct', 'partner'];
+
+/**
+ * Проверяет обязательные поля до создания сделки.
+ * → { ok: true } | { ok: false, code, missing, error }
+ */
+function validateDealInput(input) {
+  const src = input || {};
+  const missing = DEAL_REQUIRED_FIELDS.filter(f => {
+    const v = src[f.key];
+    return v == null || String(v).trim() === '';
+  });
+  if (missing.length) {
+    return {
+      ok: false,
+      code: 'DEAL_MISSING_REQUIRED_FIELDS',
+      missing: missing.map(f => f.key),
+      error:
+        `Нельзя создать сделку: не заполнены обязательные поля: ${missing.map(f => f.label).join(', ')}. ` +
+        'Заполни их и повтори — сделка с дырявыми полями хуже, чем отсутствие сделки.',
+    };
+  }
+  const type = String(src.deal_type).trim().toLowerCase();
+  if (!DEAL_TYPES.includes(type)) {
+    return {
+      ok: false,
+      code: 'DEAL_INVALID_TYPE',
+      missing: ['deal_type'],
+      error: `Тип сделки «${src.deal_type}» не из схемы. Ожидается одно из: ${DEAL_TYPES.join(', ')}.`,
+    };
+  }
+  return { ok: true };
+}
+
+
 module.exports = {
   // Storage helpers, exported for tests — the registry only reads
   // `.tools`/`.isReady`/`.setupTools`, so extra exports here are inert.
   tokenPath, sessionPath, readToken, writeToken, readSession,
+  // Контракт обязательных полей (G7) — тестируется напрямую.
+  validateDealInput, DEAL_REQUIRED_FIELDS, DEAL_TYPES,
   isReady: () => !!readToken(USER_ID),
   setupTools: ['weeek_status', 'weeek_set_token'],
 
@@ -444,12 +504,24 @@ module.exports = {
           description: { type: 'string', description: 'Deal notes/description (plain text or HTML)' },
           amount: { type: 'number', description: 'Deal amount/price' },
           contact_id: { type: 'string', description: 'Contact ID to link (optional)' },
+          source: { type: 'string', description: 'Источник сделки (роль из схемы, напр. «RosUpack 2026»)' },
+          deal_type: { type: 'string', description: 'Тип сделки: direct | partner' },
+          company_inn: { type: 'string', description: 'ИНН компании' },
+          deal_comment: { type: 'string', description: 'Комментарий к сделке' },
+          contact_name: { type: 'string', description: 'Контактное лицо' },
           custom_fields: { type: 'object', description: 'Custom field values as key-value pairs' },
           user_id: { type: 'string' },
         },
         required: ['status_id', 'title'],
       },
-      handler: async ({ status_id, title, description, amount, contact_id, custom_fields, user_id }) => {
+      handler: async (input) => {
+        // Контракт обязательных полей (G7): неполные данные — типизированная
+        // ошибка, а не сделка с дырявыми полями.
+        const check = validateDealInput(input);
+        if (!check.ok) return check;
+
+        const { status_id, title, description, amount, contact_id, custom_fields, user_id,
+                source, deal_type, company_inn, deal_comment, contact_name } = input;
         const uid = user_id || USER_ID;
         const body = {
           title,
@@ -458,6 +530,15 @@ module.exports = {
           ...(contact_id && { contactId: contact_id }),
           ...(custom_fields && { customFields: custom_fields }),
         };
+        // Источник, тип, ИНН, комментарий и контакт — роли из схемы, а не
+        // произвольные кастомные поля: агент должен передавать их явно.
+        const fields = { ...(custom_fields || {}) };
+        if (source) fields.source = source;
+        if (deal_type) fields.deal_type = deal_type;
+        if (company_inn) fields.company_inn = company_inn;
+        if (deal_comment) fields.deal_comment = deal_comment;
+        if (contact_name) fields.contact_name = contact_name;
+        if (Object.keys(fields).length) body.customFields = fields;
         const data = await weeekCall(`/crm/statuses/${encodeURIComponent(status_id)}/deals`, { method: 'POST', body }, uid);
         return data.deal ?? data;
       },
