@@ -239,9 +239,17 @@ function notesApiEnabled(){ return !['localhost','127.0.0.1'].includes(location.
 function loadFilters(){try{const s=JSON.parse(localStorage.getItem('{{EVENT_KEY}}_filters')||'{}');fMain=s.fMain||'all';fRev=s.fRev||'all';fProf=s.fProf||'all';}catch(e){}}
 function saveFilters(){try{localStorage.setItem('{{EVENT_KEY}}_filters',JSON.stringify({fMain,fRev,fProf}));}catch(e){}}
 
+// A company "site" scraped from a catalogue is often a social profile or a freemail
+// address — showing vk.com or gmail.com under «Сайт» is noise on every card. The
+// working catalogs filtered these out (cpm-autumn-2026 and four others); the template
+// did not, so anything generated from it regressed. Kept here so the template is the
+// single source of truth again.
+const SOCIAL_RE=/vk\.com|dzen\.ru|zen\.yandex|ok\.ru|instagram\.com|facebook\.com|t\.me|telegram\.(me|org)|youtube\.com|youtu\.be|rutube\.ru|tiktok\.com|twitter\.com|x\.com/i;
+const FREEMAIL_RE=/^(gmail|mail|yandex|bk|list|inbox|rambler|hotmail|outlook|yahoo|icloud)\./i;
+
 function getSiteUrl(w,email){
-  if(w) try{return new URL(w.startsWith('http')?w:'https://'+w).href;}catch(e){}
-  if(email){const d=email.split('@')[1];if(d) return 'https://'+d;}
+  if(w&&/^https?:\/\//i.test(w)&&!SOCIAL_RE.test(w)){try{return new URL(w).href;}catch(e){}}
+  if(email){const d=String(email).split('@')[1];if(d&&!SOCIAL_RE.test(d)&&!FREEMAIL_RE.test(d))return 'https://'+d;}
   return '';
 }
 function siteName(url){try{return new URL(url).hostname.replace(/^www\./,'');}catch(e){return'Сайт';}}
