@@ -2,7 +2,7 @@
 
 // Flexi Sales — exhibition notes + status via site-predeal-notes API
 //
-// Connects to the flexi-telegram-deal-bot Cloudflare Worker (/api/site-predeal-notes).
+// Connects to the flexi-site-notes Cloudflare Worker (/api/site-predeal-notes).
 // Auth: none needed for server-to-server (no Origin header = allowed by CORS policy).
 // Deals: delegate to 30-weeek.js weeek_create_deal.
 //
@@ -13,8 +13,12 @@ const fs   = require('fs');
 const path = require('path');
 const { isExpoEnabled } = require('../expo-paths.js');
 
+// The notes API used to deploy under the bot's worker name, so this default named
+// the bot. Two repos, one worker, last deploy wins — the collision behind the
+// recurring crm_management breakage (sales-skill#19, flexi-crm-automation#6).
+// The API now owns its own worker name; the bot keeps flexi-telegram-deal-bot.
 const NOTES_API = process.env.FLEXI_NOTES_API_URL
-  || 'https://flexi-telegram-deal-bot.skillset-apply.workers.dev/api/site-predeal-notes';
+  || 'https://flexi-site-notes.skillset-apply.workers.dev/api/site-predeal-notes';
 const HEALTH_URL = NOTES_API.replace('/api/site-predeal-notes', '/health');
 
 const FETCH_TIMEOUT_MS = 8000;
