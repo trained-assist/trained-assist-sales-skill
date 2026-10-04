@@ -43,8 +43,6 @@ function writeContext(skill, key, value) {
 
 function clean(v) { return (v == null ? '' : String(v)).trim(); }
 
-function cleanRole(value) { return clean(value); }
-
 function activeEventKey() {
   const ctx = readContext('flexi', 'active_exhibition');
   return ctx?.value?.event_key || null;
