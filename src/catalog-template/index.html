@@ -400,7 +400,7 @@ function render(){
         (e.b?'<div class="company-desc">'+esc(e.b)+'</div>':'')+
         '<div class="company-meta">'+
           (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'" target="_blank" rel="noopener">Checko</a>':'ИНН не найден')+
-          (CATALOG_BASE&&e.href?' <a class="catalog-link" href="'+CATALOG_BASE+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
+          (e.href?' <a class="catalog-link" href="'+(CATALOG_BASE&&!/^https?:\/\//i.test(e.href)?CATALOG_BASE:'')+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
           (e.w?' <a class="catalog-link" href="'+esc(getSiteUrl(e.w,''))+'" target="_blank" rel="noopener">Сайт</a>':'')+
         '</div>';
       if(e.rev!=null){
