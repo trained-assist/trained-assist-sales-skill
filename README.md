@@ -1,5 +1,8 @@
 # trained-assist-sales-skill
 
+**GCP VM exit (05.10.2026):** New work on `alesa-personal-assistent/us-central1-a/alesa-vm` is prohibited. Use serverless by default; the existing French VM only for a proven persistent or local requirement. Other Google services remain allowed. See [the exit plan](https://github.com/trained-assist/trained-agent-architecture/issues/145).
+
+
 Sales / CRM domain skill of [trained-assist-agent](https://github.com/trained-assist/trained-assist-agent) (epic #1470).
 Mounted by core as the `sales-skills` MCP sibling: core's `deploy.sh` checks it out next to the
 release (after the MCP contract check), `src/browser.js` adds it to each session's `.mcp.json`,
