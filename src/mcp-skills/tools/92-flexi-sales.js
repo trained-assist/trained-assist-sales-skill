@@ -122,7 +122,13 @@ const EVENT_NAMES = {
 // Сделка из карточки каталога (sales-skill#19, G9 + G10)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_(\d+)$/i;
+// eventKey идёт в путь на диске (expoDataDir), поэтому он остаётся узким:
+// буквы, цифры, дефис. companyId — только в query-параметр, и в реальных
+// каталогах он НЕ числовой: 13C56, LNG001, OL001, 21_dot_12, 6a3414… (hex IPSA).
+// Числовой парсер отвергал 100% ссылок из всех пяти каталогов — deep-link не
+// работал ни на одной выставке. Telegram deep-link payload ограничен
+// [A-Za-z0-9_-], поэтому и companyId держим в этом наборе плюс точка.
+const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_([A-Za-z0-9][A-Za-z0-9_.-]*)$/i;
 
 function parseDeepLink(payload) {
   const m = String(payload || '').trim().match(DEEP_LINK_RE);
@@ -490,10 +496,21 @@ module.exports = {
           payload: { type: 'string', description: 'Payload из deep-link: «<eventKey>_deal_<companyId>»' },
           event_key: { type: 'string', description: 'Ключ выставки (если не в payload)' },
           company_id: { type: 'string', description: 'ID компании (если не в payload)' },
+          contact_name: {
+            type: 'string',
+            description: 'Контактное лицо. Обязательное поле сделки, а в данных выставки его нет — ' +
+              'назови контакт и повтори вызов с тем же payload.',
+          },
+          company_inn: {
+            type: 'string',
+            description: 'ИНН компании, если в данных выставки его нет (найди через company_find_by_name / Checko).',
+          },
+          user_id: { type: 'string' },
         },
       },
-      handler: async ({ payload, event_key, company_id }, ctx) => {
+      handler: async ({ payload, event_key, company_id, contact_name, company_inn, user_id }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
+        const uid = user_id || process.env.USER_ID || '';
 
         let eventKey = clean(event_key);
         let companyId = clean(company_id);
@@ -549,26 +566,36 @@ module.exports = {
           `Создано со страницы каталога ${sourceLabel}.`,
           location ? `Локация: ${location}` : '',
           company.t === 1 ? 'Целевой участник: да' : '',
+          // Данные компании (выручка, директор, сайт, ОКВЭД) — иначе менеджер
+          // получает сделку с названием и без выручки, ради которой пришёл.
+          companyInfoText(company),
           notesToText(notes)
         ].filter(Boolean).join('\n');
 
         const dealInput = {
-          status_id: requireRef(readRefs(sessionUser(ctx)), 'statuses', 'Лид'),
+          status_id: requireRef(readRefs(uid), 'statuses', 'Лид'),
           title: company.n,
           source: sourceLabel,
           // Выставочный лид — прямая продажа; партнёрский тип бот ставил только
           // для партнёрской воронки, а она здесь не привязана.
           deal_type: 'direct',
-          company_inn: company.inn || '',
+          // ИНН в данных выставки есть не у всех (у 74 дублей в CPM его не было
+          // вовсе) — агент может назвать его из другого источника.
+          company_inn: clean(company_inn) || company.inn || '',
           deal_comment: dealComment,
           // Контактного лица в данных выставки нет — его должен назвать агент.
-          contact_name: '',
+          contact_name: clean(contact_name),
+          user_id: uid || undefined,
         };
 
         // Контракт обязательных полей (G7): неполные данные — не сделка с
-        // дырявыми полями, а явный запрос недостающего. Агент дополняет и повторяет.
+        // дырявыми полями, а явный запрос недостающего. Агент дополняет и повторяет
+        // ТОТ ЖЕ вызов с теми же payload/event_key/company_id плюс недостающими
+        // полями — состояние собирается заново из данных выставки, поэтому
+        // переживает и перезапуск сессии.
         const check = validateDealInput(dealInput);
         if (!check.ok) {
+          const canSupply = missing => missing.filter(f => f !== 'status_id');
           return {
             ok: false,
             code: check.code,
@@ -580,6 +607,14 @@ module.exports = {
             stand: company.s || null,
             hall: company.hall || null,
             notes_attached: notes.length,
+            // Что именно передать в следующем вызове — иначе агент не знает,
+            // чем заполнить дыру, и повторяет вызов без него вечно.
+            next_call: {
+              payload: payload || null,
+              event_key: eventKey,
+              company_id: companyId,
+              ...Object.fromEntries(canSupply(check.missing || []).map(f => [f, `<${f}>`])),
+            },
             draft: {
               status_id: dealInput.status_id,
               title: dealInput.title,
@@ -592,7 +627,43 @@ module.exports = {
         }
 
         const weeek = require('./30-weeek.js');
-        const result = await weeek.tools.weeek_create_deal.handler(dealInput, ctx);
+        // Контракт результата (sales-skill#19, C4): внешний ok:true допустим
+        // только при подтверждённом успехе. Различаем «Weeek отказал» и
+        // «не знаем, создалась ли» — иначе неясный ответ приводит либо к
+        // потерянной сделке, либо к дубликату при повторе.
+        let result;
+        try {
+          result = await weeek.tools.weeek_create_deal.handler(dealInput, ctx);
+        } catch (e) {
+          const uncertain = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+          return {
+            ok: false,
+            code: uncertain ? 'DEAL_CREATE_OUTCOME_UNKNOWN' : 'DEAL_CREATE_FAILED',
+            // created:false — повторять безопасно; unknown — сначала проверь Weeek.
+            deal_created: uncertain ? 'unknown' : false,
+            error: e.message,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            ...(uncertain
+              ? { hint: 'Ответ Weeek не дошёл. Сначала найди сделку по компании в Weeek (weeek_list_deals) и только потом повторяй — иначе получишь дубликат.' }
+              : { hint: 'Сделка не создана, можно исправить данные и повторить.' }),
+          };
+        }
+
+        // Weeek умеет вернуть не исключение, а типизированный контракт G7 — тот
+        // же, что проверяем выше. Не выдаём это за «сделка создана».
+        if (result && result.ok === false) {
+          return {
+            ...result,
+            deal_created: false,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            next_call: { payload: payload || null, event_key: eventKey, company_id: companyId,
+              ...Object.fromEntries((result.missing || []).filter(f => f !== 'status_id').map(f => [f, `<${f}>`])) },
+          };
+        }
 
         return {
           ok: true,
