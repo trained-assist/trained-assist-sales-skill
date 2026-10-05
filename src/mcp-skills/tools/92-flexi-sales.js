@@ -12,6 +12,10 @@
 const fs   = require('fs');
 const path = require('path');
 const { isExpoEnabled, expoDataDir } = require('../expo-paths.js');
+const { tokensRoot } = require('../../data-paths.js');
+const { readCredentialFile } = require('../../credential-store.js');
+// Контракт обязательных полей (G7) живёт в 30-weeek.js — рядом с create_deal.
+const { validateDealInput } = require('./30-weeek.js');
 
 const NOTES_API = process.env.FLEXI_NOTES_API_URL
   || 'https://flexi-site-notes.skillset-apply.workers.dev/api/site-predeal-notes';
@@ -133,7 +137,7 @@ function parseDeepLink(payload) {
  */
 function readRefs(userId) {
   try {
-    const file = path.join(tokensRoot(), String(userId || USER_ID), 'weeek-refs.json');
+    const file = path.join(tokensRoot(), String(userId || process.env.USER_ID), 'weeek-refs.json');
     return JSON.parse(readCredentialFile(file)) || {};
   } catch { return {}; }
 }
@@ -537,34 +541,57 @@ module.exports = {
           at: n.at || n.createdAt || '',
         }));
 
-        // Статус и источник — через привязку ролей к ID, не угадывая.
-        const refs = readRefs(USER_ID);
-        let statusId;
-        try { statusId = requireRef(refs, 'statuses', 'Лид'); }
-        catch (e) { return { error: e.message }; }
-
+        // Собираем ввод для сделки из того, что реально есть в данных.
+        const sourceLabel = EVENT_NAMES[eventKey] || eventKey;
         const location = [company.hall, company.s ? `стенд ${company.s}` : ''].filter(Boolean).join(', ');
-        const description = [
-          `Создано со страницы каталога ${EVENT_NAMES[eventKey] || eventKey}.`,
+        const dealComment = [
+          `Создано со страницы каталога ${sourceLabel}.`,
           location ? `Локация: ${location}` : '',
           company.t === 1 ? 'Целевой участник: да' : '',
-          '',
-          companyInfoText(company),
           notesToText(notes)
         ].filter(Boolean).join('\n');
 
-        const customFields = {};
-        if (company.s) customFields.stand = company.s;
-        if (company.hall) customFields.hall = company.hall;
-        if (company.inn) customFields.inn = company.inn;
+        const dealInput = {
+          status_id: requireRef(readRefs(sessionUser(ctx)), 'statuses', 'Лид'),
+          title: company.n,
+          source: sourceLabel,
+          // Выставочный лид — прямая продажа; партнёрский тип бот ставил только
+          // для партнёрской воронки, а она здесь не привязана.
+          deal_type: 'direct',
+          company_inn: company.inn || '',
+          deal_comment: dealComment,
+          // Контактного лица в данных выставки нет — его должен назвать агент.
+          contact_name: '',
+        };
+
+        // Контракт обязательных полей (G7): неполные данные — не сделка с
+        // дырявыми полями, а явный запрос недостающего. Агент дополняет и повторяет.
+        const check = validateDealInput(dealInput);
+        if (!check.ok) {
+          return {
+            ok: false,
+            code: check.code,
+            missing: check.missing,
+            error: check.error,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            stand: company.s || null,
+            hall: company.hall || null,
+            notes_attached: notes.length,
+            draft: {
+              status_id: dealInput.status_id,
+              title: dealInput.title,
+              source: dealInput.source,
+              deal_type: dealInput.deal_type,
+              company_inn: dealInput.company_inn || null,
+              deal_comment: dealComment,
+            },
+          };
+        }
 
         const weeek = require('./30-weeek.js');
-        const result = await weeek.tools.weeek_create_deal.handler({
-          status_id: statusId,
-          title: company.n,
-          description,
-          custom_fields: customFields,
-        }, ctx);
+        const result = await weeek.tools.weeek_create_deal.handler(dealInput, ctx);
 
         return {
           ok: true,

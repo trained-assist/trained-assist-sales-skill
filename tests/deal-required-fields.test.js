@@ -75,3 +75,23 @@ test('схема типов и набор полей согласованы с �
     assert.ok(props.has(f.key), `поле ${f.key} объявлено обязательным, но create_deal его не принимает`);
   }
 });
+
+test('normalizeRoleName схлопывает омоглифы и пробелы', () => {
+  const { normalizeRoleName } = require('../src/mcp-skills/tools/30-weeek.js');
+  // Латинская C неотличима от кириллической — «Cколково» и «Сколково» это одна воронка.
+  assert.equal(normalizeRoleName('Cколково'), normalizeRoleName('Сколково'));
+  assert.equal(normalizeRoleName('  Сколково  '), 'сколково');
+  assert.equal(normalizeRoleName('Партнеры'), normalizeRoleName('партнеры'));
+  // Опечатка «Парнтеры» НЕ равна «Партнеры» — это разные строки, и молча
+  // привязывать их нельзя.
+  assert.notEqual(normalizeRoleName('Парнтеры'), normalizeRoleName('Партнеры'));
+});
+
+test('suggestRoleName предлагает близкое, но не решает за оператора', () => {
+  const { suggestRoleName } = require('../src/mcp-skills/tools/30-weeek.js');
+  const s = suggestRoleName('Партнеры', ['Парнтеры', 'Консалтинг', 'Гранты']);
+  assert.equal(s.name, 'Парнтеры');
+  assert.ok(s.distance >= 1);
+  // Совсем далёкое название подсказкой не становится — шумнее, чем полезно.
+  assert.equal(suggestRoleName('Разработка ПО', ['Парнтеры']), null);
+});

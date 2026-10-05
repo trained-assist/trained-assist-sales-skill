@@ -81,6 +81,65 @@ const DEAL_SOURCE_ROLES = [
 const DEAL_TYPE_ROLES = ['direct', 'partner'];
 const DEAL_TYPE_LABELS = { direct: 'Прямые продажи', partner: 'Партнеры' };
 
+// ── Сопоставление названий ─────────────────────────────────────────────────────
+//
+// Точное совпадение оказалось хрупким на реальных данных: в Weeek воронка
+// называется «Cколково» с ЛАТИНСКОЙ C (в кириллице она неотличима глазом) и
+// «Парнтеры» — с опечаткой. Оба варианта молча не матчились, и привязка
+// оставалась пустой.
+//
+// Поэтому: нормализуем омоглифы и пробелы перед сравнением, а если роль не
+// нашлась — отдаём ближайшее найденное название как ПОДСКАЗКУ, но не binds
+// сами: догадываться за оператора нельзя, привязка влияет на реальные сделки.
+
+// Латинские буквы, неотличимые от кириллических.
+const HOMOGLYPHS = {
+  A: 'А', B: 'В', C: 'С', E: 'Е', H: 'Н', K: 'К', M: 'М', O: 'О',
+  P: 'Р', T: 'Т', X: 'Х', Y: 'У', a: 'а', c: 'с', e: 'е', o: 'о',
+  p: 'р', x: 'х', y: 'у', k: 'к', m: 'м', h: 'н', t: 'т',
+};
+
+function normalizeRoleName(value) {
+  return String(value ?? '')
+    .replace(/[ABCDEHKMOPTXYacekoprtxy]/g, (ch) => HOMOGLYPHS[ch] || ch)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/** Расстояние Левенштейна — только чтобы предложить подсказку, не для решения. */
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/** Ближайшее название среди доступных, если оно правдоподобно близко. */
+function suggestRoleName(role, available) {
+  const target = normalizeRoleName(role);
+  let best = null, bestScore = Infinity;
+  for (const name of available) {
+    const d = editDistance(target, normalizeRoleName(name));
+    if (d < bestScore) { bestScore = d; best = name; }
+  }
+  // Порог = не больше половины длины роли: иначе подсказка шумнее, чем полезна.
+  const threshold = Math.max(2, Math.floor(target.length / 2));
+  return bestScore <= threshold ? { name: best, distance: bestScore } : null;
+}
+
 const REF_GROUPS = ['funnels', 'statuses', 'deal_sources', 'deal_types'];
 
 function refsPath(userId) {
@@ -254,6 +313,21 @@ const DEAL_REQUIRED_FIELDS = [
 
 const DEAL_TYPES = ['direct', 'partner'];
 
+// Кастомные поля сделки, которые мы заполняем. Имена — схема; ID — привязка в
+// профиле (weeek_set_refs читает /crm/custom-fields). Без привязки значение
+// молча не легло бы в сделку: Weeek ждёт customFields по ID поля, а не по имени.
+const DEAL_FIELD_ROLES = [
+  { key: 'source', label: 'Источник сделки' },
+  { key: 'deal_type', label: 'Тип сделки' },
+  { key: 'stand', label: 'Стенд' },
+  { key: 'hall', label: 'Зал' },
+  { key: 'inn', label: 'ИНН' },
+  { key: 'deal_comment', label: 'Комментарий' },
+  { key: 'contact_name', label: 'Контактное лицо' },
+  { key: 'tg_chat_id', label: 'Telegram-чат' },
+  { key: 'primary_communication_channel', label: 'Канал связи' },
+];
+
 /**
  * Проверяет обязательные поля до создания сделки.
  * → { ok: true } | { ok: false, code, missing, error }
@@ -292,7 +366,8 @@ module.exports = {
   // `.tools`/`.isReady`/`.setupTools`, so extra exports here are inert.
   tokenPath, sessionPath, readToken, writeToken, readSession,
   // Контракт обязательных полей (G7) — тестируется напрямую.
-  validateDealInput, DEAL_REQUIRED_FIELDS, DEAL_TYPES,
+  validateDealInput, DEAL_REQUIRED_FIELDS, DEAL_TYPES, DEAL_FIELD_ROLES,
+  normalizeRoleName, suggestRoleName,
   isReady: () => !!readToken(USER_ID),
   setupTools: ['weeek_status', 'weeek_set_token'],
 
@@ -370,24 +445,55 @@ module.exports = {
 
         // Воронки: GET /crm/funnels → [{ id, name }]
         const funnelsData = await weeekFetch('/crm/funnels', { token });
-        const funnelByName = new Map((funnelsData.funnels ?? []).map(f => [String(f.name ?? '').trim(), f.id]));
+        // Ключ — нормализованное имя, поэтому «Cколково» с латинской C и
+        // «Сколково» с кириллической схлопываются в одну запись.
+        const funnelByName = new Map();
+        for (const f of funnelsData.funnels ?? []) funnelByName.set(normalizeRoleName(f.name), f.id);
+        const funnelNames = (funnelsData.funnels ?? []).map(f => String(f.name ?? '').trim());
         refs.funnels = { ...(refs.funnels || {}) };
         for (const role of FUNNEL_ROLES) {
-          const id = funnelByName.get(role);
+          const id = funnelByName.get(normalizeRoleName(role));
           if (id) { refs.funnels[role] = id; report.funnels.push({ role, id }); }
-          else report.unmatched.push({ group: 'funnels', role });
+          else report.unmatched.push({ group: 'funnels', role, suggestion: suggestRoleName(role, funnelNames) });
         }
 
         // Статусы: у каждой воронки свой набор, поэтому идём по привязанным воронкам.
         refs.statuses = { ...(refs.statuses || {}) };
         for (const funnelId of Object.values(refs.funnels)) {
           const data = await weeekFetch(`/crm/funnels/${encodeURIComponent(funnelId)}/statuses`, { token });
-          const byName = new Map((data.statuses ?? []).map(s => [String(s.name ?? '').trim(), s.id]));
-          for (const role of STATUS_ROLES) {
-            const id = byName.get(role);
-            if (id) { refs.statuses[role] = id; report.statuses.push({ role, id }); }
-            else report.unmatched.push({ group: 'statuses', role });
+          const byName = new Map();
+          const names = [];
+          for (const s of data.statuses ?? []) {
+            names.push(String(s.name ?? '').trim());
+            byName.set(normalizeRoleName(s.name), s.id);
           }
+          for (const role of STATUS_ROLES) {
+            const id = byName.get(normalizeRoleName(role));
+            if (id) { refs.statuses[role] = id; report.statuses.push({ role, id }); }
+            else report.unmatched.push({ group: 'statuses', role, suggestion: suggestRoleName(role, names) });
+          }
+        }
+
+        // Кастомные поля: GET /crm/custom-fields → [{ id, name, type, options }].
+        // Имена — схема, ID — привязка. В воркспейсе может не быть поля, которое
+        // бот держал константой: тогда оно честно попадает в unmatched с подсказкой,
+        // а не создаёт сделку с несуществующим полем.
+        refs.deal_fields = refs.deal_fields || {};
+        try {
+          const cf = await weeekFetch('/crm/custom-fields', { token });
+          const byName = new Map();
+          const names = [];
+          for (const f of cf.data ?? []) {
+            names.push(String(f.name ?? '').trim());
+            byName.set(normalizeRoleName(f.name), f.id);
+          }
+          for (const role of DEAL_FIELD_ROLES) {
+            const id = byName.get(normalizeRoleName(role.key));
+            if (id) { refs.deal_fields[role.key] = id; report.deal_fields.push({ role: role.key, id }); }
+            else report.unmatched.push({ group: 'deal_fields', role: role.key, suggestion: suggestRoleName(role.key, names) });
+          }
+        } catch (e) {
+          report.unmatched.push({ group: 'deal_fields', error: e.message });
         }
 
         // Источники и типы сделки — опции кастомных полей. Схема объявлена, но
@@ -406,6 +512,7 @@ module.exports = {
           bound: {
             funnels: Object.keys(refs.funnels).length,
             statuses: Object.keys(refs.statuses).length,
+            deal_fields: Object.keys(refs.deal_fields).length,
             deal_sources: Object.keys(refs.deal_sources).length,
             deal_types: Object.keys(refs.deal_types).length,
           },
@@ -523,22 +630,37 @@ module.exports = {
         const { status_id, title, description, amount, contact_id, custom_fields, user_id,
                 source, deal_type, company_inn, deal_comment, contact_name } = input;
         const uid = user_id || USER_ID;
+
+        // Комментарий — в description: это поле есть всегда, в отличие от кастомных.
         const body = {
           title,
-          ...(description !== undefined && { description }),
+          ...((description ?? deal_comment) ? { description: description ?? deal_comment } : {}),
           ...(amount !== undefined && { price: amount }),
           ...(contact_id && { contactId: contact_id }),
-          ...(custom_fields && { customFields: custom_fields }),
         };
-        // Источник, тип, ИНН, комментарий и контакт — роли из схемы, а не
-        // произвольные кастомные поля: агент должен передавать их явно.
+
+        // Кастомные поля — по ID, а не по имени: Weeek иначе молча их теряет, и
+        // сделка выходит пустой оболочкой. ID берём из привязки в профиле.
+        const refs = readRefs(uid);
         const fields = { ...(custom_fields || {}) };
-        if (source) fields.source = source;
-        if (deal_type) fields.deal_type = deal_type;
-        if (company_inn) fields.company_inn = company_inn;
-        if (deal_comment) fields.deal_comment = deal_comment;
-        if (contact_name) fields.contact_name = contact_name;
+        const unmapped = [];
+        for (const role of DEAL_FIELD_ROLES) {
+          const value = input[role.key];
+          if (value == null || String(value).trim() === '') continue;
+          const fieldId = refs?.deal_fields?.[role.key];
+          if (fieldId) fields[fieldId] = value;
+          else unmapped.push({ key: role.key, label: role.label, value });
+        }
         if (Object.keys(fields).length) body.customFields = fields;
+
+        // Поля, которых в воркспейсе нет, не выбрасываем: складываем в description
+        // читаемым блоком. Иначе сделка теряла бы данные только потому, что
+        // оператор ещё не создал кастомное поле в Weeek.
+        if (unmapped.length) {
+          const block = unmapped.map(f => `${f.label}: ${f.value}`).join('\n');
+          body.description = body.description ? `${body.description}\n\n${block}` : block;
+        }
+
         const data = await weeekCall(`/crm/statuses/${encodeURIComponent(status_id)}/deals`, { method: 'POST', body }, uid);
         return data.deal ?? data;
       },
