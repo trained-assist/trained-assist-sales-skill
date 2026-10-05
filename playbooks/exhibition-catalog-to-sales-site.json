@@ -311,7 +311,7 @@
       "steps": [
         {
           "title": "D1. Закрепить активную выставку",
-          "instructions": "flexi_set_exhibition(event_key) один раз — сохраняется в context store и переживает сессии. Дальше все flexi_* можно вызывать без event_key.",
+          "instructions": "flexi_set_active_exhibition(event_key) один раз — сохраняется в context store и переживает сессии. Дальше все flexi_* можно вызывать без event_key.",
           "execution_kind": "agent",
           "executor_role": "developer",
           "minimum_model_level": "bachelor",
