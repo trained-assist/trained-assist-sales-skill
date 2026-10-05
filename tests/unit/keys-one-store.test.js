@@ -197,7 +197,7 @@ describe('hints point to a setter that works', () => {
   it('checko_* and dadata_* name inn_set_* when no key is found', async () => {
     const c1 = await __tools.checkoTools.checko_company_financial_and_legal_data.handler({ endpoint: 'company', inn: '7707083893' });
     const c2 = await __tools.checkoTools.checko_qualify.handler({ inn: '7707083893' });
-    const d1 = await __tools.companyTools.company_full_card.handler({ inn: '7707083893' });
+    const d1 = await __tools.companyTools.company_full_card.handler({ inn: '7707083893', source: 'dadata' });
     expect(c1.error).toMatch(/inn_set_checko_key/);
     expect(c2.error).toMatch(/inn_set_checko_key/);
     expect(d1.error).toMatch(/inn_set_dadata_token/);
