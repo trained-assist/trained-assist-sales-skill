@@ -82,7 +82,7 @@ Use before checko_company_financial_and_legal_data to understand what data is av
   checko_company_financial_and_legal_data: {
     description: `Read Checko's official financial and legal data for a Russian company by INN — "что можно узнать по ИНН", "пробей компанию в Чеко", "выручка по ИНН", "есть ли суды".
 
-This is Checko's registry data, NOT the general company card: use company_get_by_inn for the card
+This is Checko's registry data, NOT the general company card: use company_full_card for the card
 (CEO, contacts, address, revenue), and this for the datasets Checko alone has.
 
 endpoint options:

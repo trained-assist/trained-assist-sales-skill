@@ -230,14 +230,18 @@ async function rusprofileFinance(cardId) {
 
 // ── DaData helpers ────────────────────────────────────────────────────────────
 
-async function dadataFindByName(query, token, limit = 5) {
+async function dadataFindByName(query, token, limit = 5, status = 'ACTIVE') {
   const res = await fetch('https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/party', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Token ${token}`,
     },
-    body: JSON.stringify({ query, count: limit, status: ['ACTIVE'] }),
+    body: JSON.stringify({
+      query,
+      count: limit,
+      ...(status && status !== 'any' ? { status: [status] } : {}),
+    }),
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`DaData ${res.status}`);
@@ -289,6 +293,96 @@ async function dadataFindByInn(inn, token) {
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
 
+// Shared by company_full_card: fetch one company's profile by a resolved INN, from either source.
+async function fetchCompanyProfile(inn, dadataToken, useDadata, include_finance = true) {
+  if (useDadata) {
+    const result = await dadataFindByInn(inn, dadataToken);
+    return result ? { source: 'dadata', found: true, ...result } : null;
+  }
+  const search = await rusprofileSearch(inn);
+  const selected =
+    search.all.find(i => normalizeInn(i.inn) === inn && i.refType === 'UL') ||
+    search.all.find(i => normalizeInn(i.inn) === inn) || null;
+  if (!selected) return null;
+
+  const card = await rusprofileCard(selected.link);
+  let finance = null;
+  if (include_finance && selected.refType === 'UL' && selected.id) {
+    try { finance = await rusprofileFinance(selected.id); } catch { /* ignore */ }
+  }
+  return {
+    found: true, source: 'rusprofile',
+    inn: card.inn || inn, kpp: card.kpp, ogrn: card.ogrn,
+    name: selected.name, fullName: card.fullName,
+    status: card.statusText, region: selected.region,
+    address: card.address || selected.address,
+    okved: selected.okved, okvedDescription: selected.okvedDescription,
+    registrationDate: selected.registrationDate,
+    ceoName: selected.ceoName, directorBlock: card.directorBlock,
+    contacts: card.contacts, finance,
+    rusprofileUrl: selected.url,
+  };
+}
+
+// Ready-to-send Telegram card. Kept next to the profile fetch so both company_full_card inputs
+// (by INN and by name) produce the identical card.
+function formatCompanyCard(profile, fallbackName) {
+  function rubles(n) {
+    if (!n) return null;
+    if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace('.0', '')} млрд руб.`;
+    if (n >= 1e6) return `${Math.round(n / 1e6)} млн руб.`;
+    return `${n.toLocaleString('ru-RU')} руб.`;
+  }
+
+  const lines = [];
+  lines.push(`\u{1F3E2} *${profile.name || profile.fullName || fallbackName || ''}*`);
+  if (profile.fullName && profile.fullName !== profile.name) lines.push(`   ${profile.fullName}`);
+
+  const ids = [profile.inn && `ИНН: ${profile.inn}`, profile.ogrn && `ОГРН: ${profile.ogrn}`].filter(Boolean);
+  if (ids.length) lines.push(`\u{1F4CB} ${ids.join(' | ')}`);
+  if (profile.status) lines.push(`\u{26A1}\u{FE0F} Статус: ${profile.status}`);
+
+  lines.push('');
+  const director = profile.ceoName || profile.directorBlock?.name;
+  if (director) lines.push(`\u{1F454} Директор: ${director}`);
+  if (profile.region) lines.push(`\u{1F4CD} Регион: ${profile.region}`);
+  if (profile.okvedDescription) lines.push(`\u{1F3ED} ОКВЭД ${profile.okved || ''}: ${profile.okvedDescription}`);
+  if (profile.registrationDate) lines.push(`\u{1F4C5} Зарегистрирована: ${profile.registrationDate}`);
+
+  const fin = profile.finance;
+  if (fin?.years?.length) {
+    lines.push('');
+    for (const yr of fin.years.slice(0, 2)) {
+      if (yr.revenue) lines.push(`\u{1F4B0} Выручка ${yr.year}: ${rubles(yr.revenue)}`);
+      if (yr.profit !== undefined && yr.profit !== null) {
+        const sign = yr.profit >= 0 ? '+' : '';
+        lines.push(`   Прибыль: ${sign}${rubles(yr.profit)}`);
+      }
+    }
+  } else if (profile.financeRevenueMlnRub) {
+    lines.push('');
+    lines.push(`\u{1F4B0} Выручка: ~${profile.financeRevenueMlnRub} млн руб.`);
+  }
+
+  const contacts = profile.contacts || {};
+  const phones = contacts.phones || profile.phones || [];
+  const emails = contacts.emails || profile.emails || [];
+  const websites = contacts.websites || profile.websites || [];
+  if (websites.length || phones.length || emails.length) {
+    lines.push('');
+    if (websites.length) lines.push(`\u{1F310} Сайт: ${websites.slice(0, 2).join(', ')}`);
+    if (phones.length)   lines.push(`\u{1F4DE} Тел: ${phones.slice(0, 3).join(', ')}`);
+    if (emails.length)   lines.push(`\u{1F4E7} Email: ${emails.slice(0, 3).join(', ')}`);
+  }
+
+  if (profile.address) {
+    lines.push('');
+    lines.push(`\u{1F5FA} Адрес: ${profile.address}`);
+  }
+  if (profile.rusprofileUrl) lines.push(`\u{1F517} ${profile.rusprofileUrl}`);
+  return lines.join('\n');
+}
+
 module.exports = {
   tools: {
 
@@ -311,22 +405,32 @@ module.exports = {
     },
 
     company_find_by_name: {
-      description: 'Find Russian company by name. Returns INN, CEO, address, OKVED. Free (Rusprofile scraping) or faster with DaData token.',
+      description: 'Find Russian companies by name — returns matches with INN, CEO, address, OKVED.\n\n' +
+        'Use this when you have a NAME and need the company (or its INN). ' +
+        'source=auto (default) uses DaData when a token is set, otherwise free Rusprofile. ' +
+        'status filters the DaData source: ACTIVE (default), LIQUIDATED, LIQUIDATING or any.',
       inputSchema: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Company name or keywords' },
+          source: { type: 'string', enum: ['auto', 'dadata', 'rusprofile'], description: 'Data source. Default auto = DaData if a token is set, else Rusprofile.' },
+          status: { type: 'string', enum: ['ACTIVE', 'LIQUIDATED', 'LIQUIDATING', 'any'], description: 'Status filter for the DaData source (default ACTIVE).' },
           limit: { type: 'number', description: 'Max results (default 5)' },
           user_id: { type: 'string' },
         },
         required: ['query'],
       },
-      handler: async ({ query, limit = 5, user_id }) => {
+      handler: async ({ query, source = 'auto', status = 'ACTIVE', limit = 5, user_id }) => {
         const uid = user_id || USER_ID;
         const dadataToken = readDadataToken(uid);
+        const useDadata = source === 'dadata' || (source === 'auto' && dadataToken);
 
-        if (dadataToken) {
-          const results = await dadataFindByName(query, dadataToken, limit);
+        if (useDadata && !dadataToken) {
+          return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
+        }
+
+        if (useDadata) {
+          const results = await dadataFindByName(query, dadataToken, limit, status);
           return { source: 'dadata', results: results.slice(0, limit) };
         }
 
@@ -346,245 +450,84 @@ module.exports = {
             inactive: r.inactive,
             financeRevenueMlnRub: r.financeRevenueMlnRub,
             rusprofileUrl: r.url,
-            _id: r.id,  // needed for company_get_by_inn with finance
+            _id: r.id,  // needed for company_full_card with finance
           })),
         };
       },
     },
 
-    company_get_by_inn: {
-      description: 'Get full company data by INN or OGRN: CEO, contacts (phones, emails, websites), address, revenue, legal status.\n\n' +
-        'source=auto (default) uses DaData when a token is set, otherwise free Rusprofile. ' +
-        'Pass source=dadata or source=rusprofile to force one. OGRN (13 digits) and OGRNIP (15) resolve via DaData only.',
+    company_full_card: {
+      description: `Full company card in one call: CEO, contacts (phones, emails, websites), address, revenue, legal status.\n\n` +
+        'Give `inn` (10 digits, 12 for IP, 13 ОГРН, 15 ОГРНИП) when you have it — it is exact. ' +
+        'Give `name` when you only have the name; it is resolved to an INN first (fuzzy — use company_find_by_name when you want to see the candidates instead of one pick).\n\n' +
+        'Returns structured data plus card_text, a ready Telegram card. ' +
+        'source=auto (default) uses DaData when a token is set, otherwise free Rusprofile; source=dadata|rusprofile forces one.',
       inputSchema: {
         type: 'object',
         properties: {
-          inn: { type: 'string', description: 'INN (10 digits, 12 for IP), OGRN (13) or OGRNIP (15)' },
+          inn: { type: 'string', description: 'INN (10 digits, 12 for IP), ОГРН (13) or ОГРНИП (15). Preferred when known.' },
+          name: { type: 'string', description: 'Company name or keywords, resolved to an INN first. Use when there is no INN.' },
           source: { type: 'string', enum: ['auto', 'dadata', 'rusprofile'], description: 'Data source. Default auto = DaData if a token is set, else Rusprofile.' },
           include_finance: { type: 'boolean', description: 'Fetch revenue/profit data (extra request, default true)' },
           user_id: { type: 'string' },
         },
-        required: ['inn'],
       },
-      handler: async ({ inn, source = 'auto', include_finance = true, user_id }) => {
+      handler: async ({ inn, name, source = 'auto', include_finance = true, user_id }) => {
         const uid = user_id || USER_ID;
-        const normalizedInn = normalizeInn(inn);
-        // 10/12 = INN (ЮЛ/ИП), 13 = ОГРН, 15 = ОГРНИП. Only DaData resolves OGRN.
-        if (!/^\d{10}(\d{2}|\d{3}|\d{5})?$/.test(normalizedInn)) {
-          return { error: `Invalid INN/OGRN: expected 10, 12, 13 or 15 digits, got "${inn}"` };
-        }
-        const isOgrn = normalizedInn.length > 12;
-
         const dadataToken = readDadataToken(uid);
         const useDadata = source === 'dadata' || (source === 'auto' && dadataToken);
 
-        if (isOgrn && !useDadata) {
-          return {
-            error: 'ОГРН (13 digits) and ОГРНИП (15) resolve via DaData only. ' +
-              'Set a token with inn_set_dadata_token, or pass the 10-digit INN.',
-          };
-        }
         if (useDadata && !dadataToken) {
           return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
         }
 
-        if (useDadata) {
-          const result = await dadataFindByInn(normalizedInn, dadataToken);
-          if (!result) return { found: false, inn: normalizedInn, source: 'dadata' };
-          return { found: true, source: 'dadata', ...result };
-        }
-
-        // Free: Rusprofile
-        const search = await rusprofileSearch(normalizedInn);
-        const selected =
-          search.all.find(i => normalizeInn(i.inn) === normalizedInn && i.refType === 'UL') ||
-          search.all.find(i => normalizeInn(i.inn) === normalizedInn) ||
-          null;
-
-        if (!selected) return { found: false, inn: normalizedInn, source: 'rusprofile' };
-
-        const card = await rusprofileCard(selected.link);
-        let finance = null;
-        if (include_finance && selected.refType === 'UL' && selected.id) {
-          try { finance = await rusprofileFinance(selected.id); } catch { /* ignore */ }
-        }
-
-        return {
-          found: true,
-          source: 'rusprofile',
-          inn: card.inn || normalizedInn,
-          kpp: card.kpp,
-          ogrn: card.ogrn,
-          name: selected.name,
-          fullName: card.fullName,
-          status: card.statusText,
-          region: selected.region,
-          address: card.address || selected.address,
-          okved: selected.okved,
-          okvedDescription: selected.okvedDescription,
-          registrationDate: selected.registrationDate,
-          ceoName: selected.ceoName,
-          directorBlock: card.directorBlock,
-          contacts: card.contacts,
-          finance,
-          rusprofileUrl: selected.url,
-        };
-      },
-    },
-
-    company_review: {
-      description: `Full company deep-dive in one call: find by name → get INN → fetch contacts, director, revenue, website.
-Use when user says: "пробей компанию X", "проанализируй X", "что за компания X", "найди информацию по X", "кто такие X".
-Returns both a formatted Telegram card (card_text) and structured data.
-Works without DaData token (free Rusprofile). With DaData token — faster and more complete.`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: 'Company name or keywords to search for. Skip if inn is provided.',
-          },
-          inn: {
-            type: 'string',
-            description: 'INN (10 or 12 digits). Skip the name search step if provided.',
-          },
-          user_id: { type: 'string' },
-        },
-      },
-      handler: async ({ name, inn, user_id }) => {
-        const uid = user_id || USER_ID;
-        const dadataToken = readDadataToken(uid);
-
-        let profile = null;
+        let resolved = inn ? normalizeInn(inn) : null;
         let searchResults = null;
 
-        // Step 1: resolve INN if not provided
-        if (!inn && name) {
-          if (dadataToken) {
+        if (resolved) {
+          // 10/12 = INN (ЮЛ/ИП), 13 = ОГРН, 15 = ОГРНИП. Only DaData resolves OGRN.
+          if (!/^\d{10}(\d{2}|\d{3}|\d{5})?$/.test(resolved)) {
+            return { error: `Invalid INN/OGRN: expected 10, 12, 13 or 15 digits, got "${inn}"` };
+          }
+          if (resolved.length > 12 && !useDadata) {
+            return {
+              error: 'ОГРН (13 digits) and ОГРНИП (15) resolve via DaData only. ' +
+                'Set a token with inn_set_dadata_token, or pass the 10-digit INN.',
+            };
+          }
+        } else if (name) {
+          // Fuzzy step: pick the best match, and return the candidates so the caller can tell a
+          // confident pick from a guess.
+          if (useDadata) {
             const results = await dadataFindByName(name, dadataToken, 3);
             searchResults = results.slice(0, 3);
             const best = results.find(r => r.inn) || results[0];
             if (!best?.inn) return { found: false, error: `Компания не найдена по запросу: "${name}"` };
-            inn = best.inn;
+            resolved = normalizeInn(best.inn);
           } else {
             const search = await rusprofileSearch(name);
             searchResults = search.all.slice(0, 3);
             const best = search.all.find(r => !r.inactive) || search.all[0];
             if (!best?.inn) return { found: false, error: `Компания не найдена по запросу: "${name}"` };
-            inn = best.inn;
+            resolved = normalizeInn(best.inn);
           }
+        } else {
+          return { found: false, error: 'Укажи inn или name' };
         }
 
-        if (!inn) return { found: false, error: 'Укажи name или inn' };
-        const normalizedInn = normalizeInn(inn);
-
-        // Step 2: full profile by INN
-        if (dadataToken) {
-          profile = await dadataFindByInn(normalizedInn, dadataToken);
-          if (profile) profile = { source: 'dadata', found: true, ...profile };
-        }
-
+        const profile = await fetchCompanyProfile(resolved, dadataToken, useDadata, include_finance);
         if (!profile) {
-          const search = await rusprofileSearch(normalizedInn);
-          const selected =
-            search.all.find(i => normalizeInn(i.inn) === normalizedInn && i.refType === 'UL') ||
-            search.all.find(i => normalizeInn(i.inn) === normalizedInn) || null;
-
-          if (!selected) {
-            return { found: false, inn: normalizedInn, error: 'Компания с таким ИНН не найдена в Rusprofile' };
-          }
-
-          const card = await rusprofileCard(selected.link);
-          let finance = null;
-          if (selected.refType === 'UL' && selected.id) {
-            try { finance = await rusprofileFinance(selected.id); } catch {}
-          }
-          profile = {
-            found: true, source: 'rusprofile',
-            inn: card.inn || normalizedInn, kpp: card.kpp, ogrn: card.ogrn,
-            name: selected.name, fullName: card.fullName,
-            status: card.statusText, region: selected.region,
-            address: card.address || selected.address,
-            okved: selected.okved, okvedDescription: selected.okvedDescription,
-            registrationDate: selected.registrationDate,
-            ceoName: selected.ceoName, directorBlock: card.directorBlock,
-            contacts: card.contacts, finance,
-            rusprofileUrl: selected.url,
+          return {
+            found: false, inn: resolved, source: useDadata ? 'dadata' : 'rusprofile',
+            error: `Компания с ИНН ${resolved} не найдена (${useDadata ? 'DaData' : 'Rusprofile'})`,
           };
         }
 
-        // Step 3: format card
-        function rubles(n) {
-          if (!n) return null;
-          if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace('.0', '')} млрд руб.`;
-          if (n >= 1e6) return `${Math.round(n / 1e6)} млн руб.`;
-          return `${n.toLocaleString('ru-RU')} руб.`;
-        }
-
-        const lines = [];
-        lines.push(`🏢 *${profile.name || profile.fullName || name}*`);
-        if (profile.fullName && profile.fullName !== profile.name)
-          lines.push(`   ${profile.fullName}`);
-
-        const ids = [profile.inn && `ИНН: ${profile.inn}`, profile.ogrn && `ОГРН: ${profile.ogrn}`].filter(Boolean);
-        if (ids.length) lines.push(`📋 ${ids.join(' | ')}`);
-        if (profile.status) lines.push(`⚡️ Статус: ${profile.status}`);
-
-        lines.push('');
-        const director = profile.ceoName || (profile.directorBlock?.name);
-        if (director) lines.push(`👔 Директор: ${director}`);
-        if (profile.region) lines.push(`📍 Регион: ${profile.region}`);
-        if (profile.okvedDescription) lines.push(`🏭 ОКВЭД ${profile.okved || ''}: ${profile.okvedDescription}`);
-        if (profile.registrationDate) lines.push(`📅 Зарегистрирована: ${profile.registrationDate}`);
-
-        // Finance
-        const fin = profile.finance;
-        if (fin?.years?.length) {
-          lines.push('');
-          for (const yr of fin.years.slice(0, 2)) {
-            if (yr.revenue) lines.push(`💰 Выручка ${yr.year}: ${rubles(yr.revenue)}`);
-            if (yr.profit !== undefined && yr.profit !== null) {
-              const sign = yr.profit >= 0 ? '+' : '';
-              lines.push(`   Прибыль: ${sign}${rubles(yr.profit)}`);
-            }
-          }
-        } else if (profile.financeRevenueMlnRub) {
-          lines.push('');
-          lines.push(`💰 Выручка: ~${profile.financeRevenueMlnRub} млн руб.`);
-        }
-
-        // Contacts
-        const contacts = profile.contacts || {};
-        const phones = contacts.phones || profile.phones || [];
-        const emails = contacts.emails || profile.emails || [];
-        const websites = contacts.websites || profile.websites || [];
-        if (websites.length || phones.length || emails.length) {
-          lines.push('');
-          if (websites.length) lines.push(`🌐 Сайт: ${websites.slice(0, 2).join(', ')}`);
-          if (phones.length)   lines.push(`📞 Тел: ${phones.slice(0, 3).join(', ')}`);
-          if (emails.length)   lines.push(`📧 Email: ${emails.slice(0, 3).join(', ')}`);
-        }
-
-        if (profile.address) {
-          lines.push('');
-          lines.push(`🗺 Адрес: ${profile.address}`);
-        }
-        if (profile.rusprofileUrl) lines.push(`🔗 ${profile.rusprofileUrl}`);
-
         return {
-          found: true,
-          card_text: lines.join('\n'),
-          inn: profile.inn,
-          ogrn: profile.ogrn,
-          name: profile.name || profile.fullName,
-          director: director || null,
-          region: profile.region,
-          okved: profile.okved,
-          okvedDescription: profile.okvedDescription,
-          revenue: fin?.years?.[0]?.revenue || null,
-          contacts: { phones, emails, websites },
-          rusprofileUrl: profile.rusprofileUrl,
-          source: profile.source,
+          ...profile,
+          card_text: formatCompanyCard(profile, name),
+          director: profile.ceoName || profile.directorBlock?.name || null,
+          search_results: searchResults,
         };
       },
     },

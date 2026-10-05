@@ -53,40 +53,6 @@ function formatParty(s) {
 
 module.exports = { tools: {
 
-  dadata_suggest: {
-    description: `Search Russian companies/IPs by name or partial name via DaData.
-Returns up to N matching companies with INN, OGRN, address, director, OKVED, status.
-Use to find a company INN when you only know the name.`,
-    inputSchema: {
-      type: 'object',
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: 'Company name or part of it' },
-        count: { type: 'number', description: 'Max results (default 5, max 20)', default: 5 },
-        status: {
-          type: 'string',
-          enum: ['ACTIVE', 'LIQUIDATED', 'LIQUIDATING', ''],
-          description: 'Filter by status. Default: all',
-          default: '',
-        },
-      },
-    },
-    handler: async ({ query, count = 5, status = '' }, ctx) => {
-      const creds = readCreds(ctx?.userId);
-      if (!creds.token) return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
-
-      const body = { query, count: Math.min(count, 20) };
-      if (status) body.status = [status];
-
-      let data;
-      try { data = await post(BASE_SUGGEST, creds, body); }
-      catch (e) { return { error: e.message }; }
-
-      const suggestions = (data.suggestions || []).map(formatParty);
-      return { query, count: suggestions.length, suggestions };
-    },
-  },
-
   dadata_address: {
     description: `Suggest or clean a Russian address via DaData.
 mode=suggest — autocomplete (returns up to N options).
