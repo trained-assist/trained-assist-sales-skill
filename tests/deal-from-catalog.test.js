@@ -99,3 +99,15 @@ test('handler отличает выставку без данных', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deal-no-data-'));
   assert.equal(TOOL._test.findCompanyForTest(dir, 'rosupack2026', '415'), null);
 });
+
+test('заметки попадают в комментарий сделки, а не теряются', () => {
+  const { notesToText } = TOOL._test;
+  const comment = [
+    'Создано со страницы каталога RosUpack 2026.',
+    'Локация: Павильон 3 Зал 14, стенд E5045',
+    notesToText([{ kind: 'text', text: 'просил КП', at: '2026-10-04T12:00:00.000Z' }])
+  ].filter(Boolean).join('\n');
+  assert.match(comment, /Заметка 1 — просил КП/);
+  // Это главное требование владельца: менеджер обязан видеть, что писал посетитель.
+  assert.ok(comment.includes('просил КП'));
+});
