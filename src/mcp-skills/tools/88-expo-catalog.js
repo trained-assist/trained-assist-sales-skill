@@ -70,11 +70,12 @@ Parameters:
           out_dir:       { type: 'string', description: 'Output directory (default: expo pipeline dir)' },
           use_targets:   { type: 'boolean', description: 'Use targets.json instead of enriched.json', default: false },
           tg_bot:        { type: 'string', description: 'Telegram username, в котором открывается deep-link «Создать сделку» (без @)', default: 'cmr_management_bot' },
+          allow_unsafe_ids: { type: 'boolean', description: 'Собрать каталог, даже если часть id нельзя передать в Telegram-ссылку (повторы id при этом всё равно запрещены)', default: false },
           production_okved: { type: 'array', items: { type: 'string' }, description: 'ОКВЭД-префиксы производства для классификации t:1/nt:1. Default: ["13.","14."] (текстиль). Для цветов: ["01.","16.","20.","22.","23.","25.","26.","27.","28.","32."]' },
         },
       },
 
-      handler: async ({ expo_id, event_key, expo_title, expo_date = '', catalog_base = '', favicon_emoji = '🌸', out_dir, use_targets = false, tg_bot = DEFAULT_TG_BOT, production_okved }, ctx) => {
+      handler: async ({ expo_id, event_key, expo_title, expo_date = '', catalog_base = '', favicon_emoji = '🌸', out_dir, use_targets = false, tg_bot = DEFAULT_TG_BOT, production_okved, allow_unsafe_ids = false }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
 
         const id = expo_id.startsWith('http') ? slugify(expo_id) : expo_id;
@@ -179,7 +180,15 @@ Parameters:
         // для второй компании на общем стенде создаст чужую сделку, а id с
         // кириллицей или несколькими стендами не передаётся в ссылке вовсе.
         const idProblems = findIdProblems(exArray);
-        if (idProblems.duplicates.length || idProblems.unsafe.length) {
+        // Повтор id — всегда стоп: две компании на одном стенде получили бы
+        // один deep-link и одну сделку, причём тихо. Такой обход невозможен
+        // принципиально: показывать каталог значит врать посетителю.
+        //
+        // Непригодный для ссылки id допускает осознанный обход: на существующих
+        // выставках (CPM) такие id уже в данных и в заметках посетителей,
+        // молчаливая перенумерация потеряла бы их привязку. Плата — понятная и
+        // видимая: эти карточки не смогут открыть сделку.
+        if (idProblems.duplicates.length || (idProblems.unsafe.length && !allow_unsafe_ids)) {
           const where = path.basename(dataFile);
           return {
             error: `Идентичность компаний в данных не годится для каталога: ` +
@@ -192,6 +201,9 @@ Parameters:
             unsafe_ids: idProblems.unsafe.slice(0, 20),
             fix: 'Присвой id в данных выставки (устойчивый ключ участника), а стенд оставь в поле stand. ' +
               'Для быстрой правки: company_get_by_name → уникальный id по ОГРН.',
+            ...(idProblems.unsafe.length && !idProblems.duplicates.length
+              ? { workaround: 'Если эти id уже в заметках посетителей и перенумеровать нельзя — пересобери с allow_unsafe_ids=true: каталог соберётся, но «Создать сделку» на таких карточках работать не будет.' }
+              : {}),
           };
         }
 
@@ -217,6 +229,9 @@ Parameters:
           // а не «на странице выставки, где заметки молча уходят не туда».
           notes_api: notesApi,
           tg_bot: tgBot,
+          // Сколько карточек не смогут открыть сделку: id нельзя передать в
+          // ссылке. Видно в ответе, а не по жалобам посетителей.
+          unsafe_ids_count: idProblems.unsafe.length,
           stats: {
             total: exArray.length,
             targets: targets.length,
