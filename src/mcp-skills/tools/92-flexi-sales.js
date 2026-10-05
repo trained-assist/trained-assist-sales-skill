@@ -211,14 +211,15 @@ module.exports = {
           active_exhibition: exh,
           hint: exh
             ? `Активна: ${exh.name || exh.event_key}. Можно добавлять заметки и работать со сделками.`
-            : 'Выставка не выбрана. Вызови flexi_set_exhibition(event_key).',
+            : 'Выставка не выбрана. Вызови flexi_set_active_exhibition(event_key).',
         };
       },
     },
 
-    flexi_set_exhibition: {
+    flexi_set_active_exhibition: {
       description:
-        'Выбрать активную выставку. Сохраняется в context store — запоминается между сессиями.\n\n' +
+        'Выбрать, с какой выставкой работать — активная выставка. Сохраняется в context store, запоминается между сессиями.\n\n' +
+        'Это выбор конкретной выставки, а НЕ включение режима. Чтобы включить сами инструменты выставок, используй expo_enable_skills.\n\n' +
         'Известные event_key: rosupack2026, stonefair2026, oborot2026, reindustry2026, ' +
         'interautomechanica2026, avtobusexpo2026, ipsa2026, cpmautumn2026, textilesalon2026, otdykhleisure2026',
       inputSchema: {
@@ -247,12 +248,12 @@ module.exports = {
         properties: {
           company_id: { type: 'string', description: 'ID компании или номер стенда' },
           company_name: { type: 'string', description: 'Название компании (если нет company_id)' },
-          event_key: { type: 'string', description: 'Ключ выставки (если не установлен через flexi_set_exhibition)' },
+          event_key: { type: 'string', description: 'Ключ выставки (если не установлен через flexi_set_active_exhibition)' },
         },
       },
       handler: async ({ company_id, company_name, event_key }) => {
         const eventKey = resolveEventKey(event_key);
-        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
 
         const cid = clean(company_id) || companyIdFromStand(company_name) || companyIdFromName(company_name || '');
         if (!cid) return { error: 'Нужен company_id или company_name' };
@@ -290,7 +291,7 @@ module.exports = {
       },
       handler: async ({ company_ids, event_key }) => {
         const eventKey = resolveEventKey(event_key);
-        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
         if (!Array.isArray(company_ids) || !company_ids.length) return { error: 'company_ids должен быть непустым массивом' };
 
         const ids = company_ids.slice(0, 50).map(clean).filter(Boolean);
@@ -338,7 +339,7 @@ module.exports = {
       },
       handler: async ({ company_name, note_text, company_id, stand, hall, event_key }) => {
         const eventKey = resolveEventKey(event_key);
-        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
         if (!clean(company_name)) return { error: 'company_name обязателен' };
         if (!clean(note_text)) return { error: 'note_text обязателен' };
 
@@ -386,7 +387,7 @@ module.exports = {
       },
       handler: async ({ company_id, company_name, note_id, match, event_key }) => {
         const eventKey = resolveEventKey(event_key);
-        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
 
         const cid = clean(company_id) || companyIdFromStand(company_name) || companyIdFromName(company_name || '');
         if (!cid) return { error: 'Нужен company_id или company_name' };
@@ -503,7 +504,7 @@ module.exports = {
           if (!companyId) companyId = parsed.companyId;
         }
         eventKey = resolveEventKey(eventKey);
-        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_exhibition.' };
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
         if (!companyId) return { error: 'Нужен payload или company_id' };
 
         // Компания — из данных выставки, а не из стенда: на одном стенде может

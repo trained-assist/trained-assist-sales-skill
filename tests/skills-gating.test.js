@@ -22,8 +22,8 @@ test('hidden sales-skills modules are not registered; others stay', () => {
   fs.writeFileSync(file, JSON.stringify({ hidden: { modules: ['sales-skills/85-expo.js', '30-weeek.js'] } }));
   const all = toolNames({ HOME: dir });
   const gated = toolNames({ HOME: dir, SKILLS_RESOLVED: file });
-  assert.ok(all.includes('expo_enable'));
-  assert.ok(!gated.includes('expo_enable'), 'module of a switched-off section is hidden');
+  assert.ok(all.includes('expo_enable_skills'));
+  assert.ok(!gated.includes('expo_enable_skills'), 'module of a switched-off section is hidden');
   assert.ok(gated.includes('weeek_status'), 'a bare core module name never hides a sibling module');
 });
 
