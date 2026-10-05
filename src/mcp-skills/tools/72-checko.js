@@ -66,7 +66,7 @@ module.exports = { tools: {
 
   checko_discover: {
     description: `List all available Checko API endpoints with descriptions.
-Use before read_checko_company_data to understand what data is available.`,
+Use before checko_company_financial_and_legal_data to understand what data is available.`,
     inputSchema: { type: 'object', properties: {} },
     handler: async (_, ctx) => {
       const key = readKey(ctx?.userId);
@@ -74,15 +74,15 @@ Use before read_checko_company_data to understand what data is available.`,
         note: 'Daily quota ~50 requests (free plan). /v2/finances is the main endpoint for revenue.',
         key_configured: !!key,
         endpoints: CHECKO_ENDPOINTS,
-        usage: 'Call read_checko_company_data with endpoint name and INN to fetch data.',
+        usage: 'Call checko_company_financial_and_legal_data with endpoint name and INN to fetch data.',
       };
     },
   },
 
-  read_checko_company_data: {
-    description: `Read a named Checko dataset for a Russian company by INN — "что можно узнать по ИНН", "пробей компанию в Чеко".
+  checko_company_financial_and_legal_data: {
+    description: `Read Checko's official financial and legal data for a Russian company by INN — "что можно узнать по ИНН", "пробей компанию в Чеко", "выручка по ИНН", "есть ли суды".
 
-This is Checko's own data, NOT the general company card: use company_get_by_inn for the card
+This is Checko's registry data, NOT the general company card: use company_get_by_inn for the card
 (CEO, contacts, address, revenue), and this for the datasets Checko alone has.
 
 endpoint options:

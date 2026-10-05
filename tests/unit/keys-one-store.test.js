@@ -120,7 +120,7 @@ describe('precedence: the user\'s own key beats the platform key', () => {
   it('checko: user key overrides platform env', async () => {
     setEnv('INN_CHECKO_KEY', 'platform-checko');
     await __tools.innTools.inn_set_checko_key.handler({ key: 'my-checko' }, { userId: USER });
-    await __tools.checkoTools.read_checko_company_data.handler({ endpoint: 'company', inn: '7707083893' });
+    await __tools.checkoTools.checko_company_financial_and_legal_data.handler({ endpoint: 'company', inn: '7707083893' });
     expect(calls[0].url).toContain('key=my-checko');
   });
 });
@@ -195,7 +195,7 @@ describe('hints point to a setter that works', () => {
   beforeEach(reset);
 
   it('checko_* and dadata_* name inn_set_* when no key is found', async () => {
-    const c1 = await __tools.checkoTools.read_checko_company_data.handler({ endpoint: 'company', inn: '7707083893' });
+    const c1 = await __tools.checkoTools.checko_company_financial_and_legal_data.handler({ endpoint: 'company', inn: '7707083893' });
     const c2 = await __tools.checkoTools.checko_qualify.handler({ inn: '7707083893' });
     const d1 = await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(c1.error).toMatch(/inn_set_checko_key/);
