@@ -87,31 +87,6 @@ Use to find a company INN when you only know the name.`,
     },
   },
 
-  dadata_find: {
-    description: `Find a Russian company by INN or OGRN via DaData.
-Returns full company card: legal name, address, director, OKVED, status.
-More reliable than dadata_suggest when you already have the INN.`,
-    inputSchema: {
-      type: 'object',
-      required: ['inn'],
-      properties: {
-        inn: { type: 'string', description: 'INN (10 digits) or OGRN (13 digits)' },
-      },
-    },
-    handler: async ({ inn }, ctx) => {
-      const creds = readCreds(ctx?.userId);
-      if (!creds.token) return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
-
-      let data;
-      try { data = await post(BASE_FIND_ID, creds, { query: inn, count: 1 }); }
-      catch (e) { return { error: e.message }; }
-
-      const suggestions = data.suggestions || [];
-      if (!suggestions.length) return { found: false, inn };
-      return { found: true, company: formatParty(suggestions[0]) };
-    },
-  },
-
   dadata_address: {
     description: `Suggest or clean a Russian address via DaData.
 mode=suggest — autocomplete (returns up to N options).

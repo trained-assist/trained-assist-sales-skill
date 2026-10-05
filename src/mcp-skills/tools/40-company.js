@@ -353,26 +353,42 @@ module.exports = {
     },
 
     company_get_by_inn: {
-      description: 'Get full company data by INN: CEO, contacts (phones, emails, websites), address, revenue, legal status. Free (Rusprofile) or with DaData for faster results.',
+      description: 'Get full company data by INN or OGRN: CEO, contacts (phones, emails, websites), address, revenue, legal status.\n\n' +
+        'source=auto (default) uses DaData when a token is set, otherwise free Rusprofile. ' +
+        'Pass source=dadata or source=rusprofile to force one. OGRN (13 digits) and OGRNIP (15) resolve via DaData only.',
       inputSchema: {
         type: 'object',
         properties: {
-          inn: { type: 'string', description: '10-digit INN (ИНН юрлица) or 12-digit for IP' },
+          inn: { type: 'string', description: 'INN (10 digits, 12 for IP), OGRN (13) or OGRNIP (15)' },
+          source: { type: 'string', enum: ['auto', 'dadata', 'rusprofile'], description: 'Data source. Default auto = DaData if a token is set, else Rusprofile.' },
           include_finance: { type: 'boolean', description: 'Fetch revenue/profit data (extra request, default true)' },
           user_id: { type: 'string' },
         },
         required: ['inn'],
       },
-      handler: async ({ inn, include_finance = true, user_id }) => {
+      handler: async ({ inn, source = 'auto', include_finance = true, user_id }) => {
         const uid = user_id || USER_ID;
         const normalizedInn = normalizeInn(inn);
-        if (!/^\d{10}(\d{2})?$/.test(normalizedInn)) {
-          return { error: `Invalid INN: expected 10 or 12 digits, got "${inn}"` };
+        // 10/12 = INN (ЮЛ/ИП), 13 = ОГРН, 15 = ОГРНИП. Only DaData resolves OGRN.
+        if (!/^\d{10}(\d{2}|\d{3}|\d{5})?$/.test(normalizedInn)) {
+          return { error: `Invalid INN/OGRN: expected 10, 12, 13 or 15 digits, got "${inn}"` };
         }
+        const isOgrn = normalizedInn.length > 12;
 
         const dadataToken = readDadataToken(uid);
+        const useDadata = source === 'dadata' || (source === 'auto' && dadataToken);
 
-        if (dadataToken) {
+        if (isOgrn && !useDadata) {
+          return {
+            error: 'ОГРН (13 digits) and ОГРНИП (15) resolve via DaData only. ' +
+              'Set a token with inn_set_dadata_token, or pass the 10-digit INN.',
+          };
+        }
+        if (useDadata && !dadataToken) {
+          return { error: 'DaData token not configured. Run: inn_set_dadata_token' };
+        }
+
+        if (useDadata) {
           const result = await dadataFindByInn(normalizedInn, dadataToken);
           if (!result) return { found: false, inn: normalizedInn, source: 'dadata' };
           return { found: true, source: 'dadata', ...result };

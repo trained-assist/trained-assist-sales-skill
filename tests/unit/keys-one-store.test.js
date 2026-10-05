@@ -106,21 +106,21 @@ describe('precedence: the user\'s own key beats the platform key', () => {
 
   it('platform env is used when the user has no key', async () => {
     setEnv('INN_DADATA_TOKEN', 'platform-token');
-    await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(calls[0].auth).toBe('Token platform-token');
   });
 
   it('user key saved via inn_set_dadata_token overrides platform env', async () => {
     setEnv('INN_DADATA_TOKEN', 'platform-token');
     await __tools.innTools.inn_set_dadata_token.handler({ token: 'mine', secret: 's' }, { userId: USER });
-    await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(calls[0].auth).toBe('Token mine');
   });
 
   it('checko: user key overrides platform env', async () => {
     setEnv('INN_CHECKO_KEY', 'platform-checko');
     await __tools.innTools.inn_set_checko_key.handler({ key: 'my-checko' }, { userId: USER });
-    await __tools.checkoTools.checko_get.handler({ endpoint: 'company', inn: '7707083893' });
+    await __tools.checkoTools.read_checko_company_data.handler({ endpoint: 'company', inn: '7707083893' });
     expect(calls[0].url).toContain('key=my-checko');
   });
 });
@@ -140,7 +140,7 @@ describe('company_* reads the same store', () => {
     expect(r.ok).toBe(true);
     expect(JSON.parse(fs.readFileSync(store(), 'utf8')).dadataToken).toBe('via-company');
     expect(fs.statSync(store()).mode & 0o777).toBe(0o600);
-    await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(calls[0].auth).toBe('Token via-company');
   });
 });
@@ -151,7 +151,7 @@ describe('existing keys in old places stay readable', () => {
   it('legacy agent-tokens/<u>/dadata plain file is read by dadata_* and company_*', async () => {
     fs.mkdirSync(path.join(TOKENS(), USER), { recursive: true });
     fs.writeFileSync(path.join(TOKENS(), USER, 'dadata'), 'legacy-plain\n');
-    await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     const r = await __tools.companyTools.company_find_by_name.handler({ query: 'Тест' });
     expect(r.source).toBe('dadata');
     expect(calls.map(c => c.auth)).toEqual(['Token legacy-plain', 'Token legacy-plain']);
@@ -168,7 +168,7 @@ describe('existing keys in old places stay readable', () => {
     fs.mkdirSync(path.join(TOKENS(), USER), { recursive: true });
     fs.writeFileSync(path.join(TOKENS(), USER, 'dadata'), 'legacy-plain');
     await __tools.innTools.inn_set_dadata_token.handler({ token: 'new', secret: 's' }, { userId: USER });
-    await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(calls[0].auth).toBe('Token new');
   });
 });
@@ -195,9 +195,9 @@ describe('hints point to a setter that works', () => {
   beforeEach(reset);
 
   it('checko_* and dadata_* name inn_set_* when no key is found', async () => {
-    const c1 = await __tools.checkoTools.checko_get.handler({ endpoint: 'company', inn: '7707083893' });
+    const c1 = await __tools.checkoTools.read_checko_company_data.handler({ endpoint: 'company', inn: '7707083893' });
     const c2 = await __tools.checkoTools.checko_qualify.handler({ inn: '7707083893' });
-    const d1 = await __tools.dadataTools.dadata_find.handler({ inn: '7707083893' });
+    const d1 = await __tools.companyTools.company_get_by_inn.handler({ inn: '7707083893' });
     expect(c1.error).toMatch(/inn_set_checko_key/);
     expect(c2.error).toMatch(/inn_set_checko_key/);
     expect(d1.error).toMatch(/inn_set_dadata_token/);
