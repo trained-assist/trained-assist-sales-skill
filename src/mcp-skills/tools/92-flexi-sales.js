@@ -12,14 +12,18 @@
 const fs   = require('fs');
 const path = require('path');
 const { isExpoEnabled, expoDataDir } = require('../expo-paths.js');
+const { notesApiUrl, notesHealthUrl } = require('../notes-api.js');
 const { tokensRoot } = require('../../data-paths.js');
 const { readCredentialFile } = require('../../credential-store.js');
 // Контракт обязательных полей (G7) живёт в 30-weeek.js — рядом с create_deal.
 const { validateDealInput } = require('./30-weeek.js');
 
-const NOTES_API = process.env.FLEXI_NOTES_API_URL
-  || 'https://flexi-site-notes.skillset-apply.workers.dev/api/site-predeal-notes';
-const HEALTH_URL = NOTES_API.replace('/api/site-predeal-notes', '/health');
+// Адрес API заметок — из notes-api.js, тем же, что подставляется в собираемый
+// каталог. Раньше дефолт стоял здесь, а в шаблоне каталога был зашит другой
+// воркер: инструменты и сайт писали заметки в разные места.
+const notesApi = notesApiUrl();
+const NOTES_API = notesApi;
+const HEALTH_URL = notesHealthUrl();
 
 const FETCH_TIMEOUT_MS = 8000;
 
@@ -122,19 +126,10 @@ const EVENT_NAMES = {
 // Сделка из карточки каталога (sales-skill#19, G9 + G10)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// eventKey идёт в путь на диске (expoDataDir), поэтому он остаётся узким:
-// буквы, цифры, дефис. companyId — только в query-параметр, и в реальных
-// каталогах он НЕ числовой: 13C56, LNG001, OL001, 21_dot_12, 6a3414… (hex IPSA).
-// Числовой парсер отвергал 100% ссылок из всех пяти каталогов — deep-link не
-// работал ни на одной выставке. Telegram deep-link payload ограничен
-// [A-Za-z0-9_-], поэтому и companyId держим в этом наборе плюс точка.
-const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_([A-Za-z0-9][A-Za-z0-9_.-]*)$/i;
-
-function parseDeepLink(payload) {
-  const m = String(payload || '').trim().match(DEEP_LINK_RE);
-  if (!m) return null;
-  return { eventKey: m[1], companyId: m[2] };
-}
+// Идентичность компании и разбор deep-link живут в expo-ids.js — тем же
+// контрактом пользуются генератор каталога и его проверка на сборке. Здесь
+// только реэкспорт для тестов и вызывающего кода.
+const { parseDeepLink } = require('../expo-ids.js');
 
 /**
  * Привязка ролей к ID Weeek из профиля (weeek_set_refs). Без неё агент не может
