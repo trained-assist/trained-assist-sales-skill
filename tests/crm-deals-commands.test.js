@@ -1,5 +1,5 @@
 'use strict';
-// crm_deals_notes — карточка «команда бота → что вызвать».
+// crm_deals_commands — карточка «команда бота → что вызвать».
 //
 // Три вещи, которые легко сломать:
 //   1. палитра не выдаётся без объявленного токена CRM (иначе агент уверенно
@@ -14,7 +14,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const TOOL = require('../src/mcp-skills/tools/93-crm-deals-notes.js');
+const TOOL = require('../src/mcp-skills/tools/93-crm-deals-commands.js');
 const WEEEK = require('../src/mcp-skills/tools/30-weeek.js');
 const FLEXI = require('../src/mcp-skills/tools/92-flexi-sales.js');
 
@@ -34,7 +34,7 @@ function tmpTokens() {
 test('без токена CRM палитра не выдаётся, а не выдаётся вслепую', async () => {
   const t = tmpTokens();
   try {
-    const r = await TOOL.tools.crm_deals_notes.handler({}, { userId: 'u1' });
+    const r = await TOOL.tools.crm_deals_commands.handler({}, { userId: 'u1' });
     assert.equal(r.ok, false);
     assert.equal(r.code, 'CRM_PALETTE_UNAVAILABLE');
     assert.match(r.hint, /токен/i);
@@ -47,7 +47,7 @@ test('CRM определяется по объявленному токену', 
   try {
     fs.mkdirSync(path.join(t.dir, 'u1'), { recursive: true });
     fs.writeFileSync(path.join(t.dir, 'u1', 'weeek'), 'fake');
-    const r = await TOOL.tools.crm_deals_notes.handler({ command: '/deals' }, { userId: 'u1' });
+    const r = await TOOL.tools.crm_deals_commands.handler({ command: '/deals' }, { userId: 'u1' });
     assert.equal(r.ok, true);
     assert.equal(r.crm, 'weeek');
     assert.ok(r.card.length > 500);
@@ -59,7 +59,7 @@ test('явное имя CRM важнее найденного токена', asy
   try {
     fs.mkdirSync(path.join(t.dir, 'u1'), { recursive: true });
     fs.writeFileSync(path.join(t.dir, 'u1', 'weeek'), 'fake');
-    const r = await TOOL.tools.crm_deals_notes.handler({ crm: 'weeek' }, { userId: 'u1' });
+    const r = await TOOL.tools.crm_deals_commands.handler({ crm: 'weeek' }, { userId: 'u1' });
     assert.equal(r.crm, 'weeek');
     assert.equal(r.ok, true);
   } finally { t.restore(); }
@@ -68,7 +68,7 @@ test('явное имя CRM важнее найденного токена', asy
 test('неизвестная CRM получает список известных, а не тишину', async () => {
   const t = tmpTokens();
   try {
-    const r = await TOOL.tools.crm_deals_notes.handler({ crm: 'amocrm' }, { userId: 'u1' });
+    const r = await TOOL.tools.crm_deals_commands.handler({ crm: 'amocrm' }, { userId: 'u1' });
     assert.equal(r.ok, false);
     assert.deepEqual(r.known_crms, ['weeek']);
     assert.match(r.hint, /amocrm/);
@@ -127,7 +127,7 @@ test('привязка ролей видна в контексте: неприв
     fs.mkdirSync(path.join(t.dir, 'u1'), { recursive: true });
     fs.writeFileSync(path.join(t.dir, 'u1', 'weeek'), 'fake');
     fs.writeFileSync(path.join(t.dir, 'u1', 'weeek-refs.json'), JSON.stringify({ statuses: { Лид: 's1' } }));
-    const r = await TOOL.tools.crm_deals_notes.handler({}, { userId: 'u1' });
+    const r = await TOOL.tools.crm_deals_commands.handler({}, { userId: 'u1' });
     assert.equal(r.ok, true);
     assert.deepEqual(r.context.refs_bound.statuses, ['Лид']);
     assert.equal(r.context.refs_unbound.statuses.length, 14);
