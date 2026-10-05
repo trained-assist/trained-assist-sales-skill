@@ -142,6 +142,11 @@ function cleanRole(value) {
   return clean(value);
 }
 
+/** Профиль сессии: ctx важнее процесса — сессия может идти под своим USER_ID. */
+function sessionUser(ctx) {
+  return clean(ctx?.userId) || clean(process.env.USER_ID);
+}
+
 function requireRef(refs, group, role) {
   const name = cleanRole(role);
   if (!name) throw new Error(`weeek_set_refs: пустая роль в группе "${group}"`);
@@ -538,7 +543,7 @@ module.exports = {
         }));
 
         // Статус и источник — через привязку ролей к ID, не угадывая.
-        const refs = readRefs(USER_ID);
+        const refs = readRefs(sessionUser(ctx));
         let statusId;
         try { statusId = requireRef(refs, 'statuses', 'Лид'); }
         catch (e) { return { error: e.message }; }
