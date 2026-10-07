@@ -1,6 +1,6 @@
 # trained-assist-sales-skill
 
-**GCP VM exit (05.10.2026):** New work on `alesa-personal-assistent/us-central1-a/alesa-vm` is prohibited. Use serverless by default; the existing French VM only for a proven persistent or local requirement. Other Google services remain allowed. See [the exit plan](https://github.com/trained-assist/trained-agent-architecture/issues/145).
+**GCP VM exit (05.10.2026):** New work on `alesa-personal-assistent/us-central1-a/alesa-vm` is prohibited. Choose hosting per service architecture and owning decision. HH cold-search hosting and sequencing are tracked in [issue #187](https://github.com/trained-assist/trained-agent-architecture/issues/187), under the [architecture exit plan](https://github.com/trained-assist/trained-agent-architecture/issues/145); do not assume a French VM or serverless target. Other Google services remain allowed.
 
 
 Sales / CRM domain skill of [trained-assist-agent](https://github.com/trained-assist/trained-assist-agent) (epic #1470).
