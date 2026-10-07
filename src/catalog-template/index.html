@@ -227,7 +227,11 @@ body{background:var(--bg);color:var(--tx);font-family:'PT Sans',sans-serif;font-
 const EX = {{EX_JSON}};
 
 const TOTAL = EX.length;
-const NOTES_API = 'https://flexi-telegram-deal-bot.skillset-apply.workers.dev/api/site-predeal-notes';
+// Адрес API заметок подставляет expo_build_catalog (src/mcp-skills/notes-api.js)
+// — тот же, что используют инструменты агента. Хардкод воркера здесь означал
+// бы, что шаблон и инструменты пишут заметки в разные места.
+const NOTES_API = {{NOTES_API}};
+const TG_BOT = '{{TG_BOT_USERNAME}}';
 const EVENT_KEY = '{{EVENT_KEY}}';
 const CATALOG_BASE = '{{CATALOG_BASE}}';
 
@@ -279,21 +283,42 @@ async function unrejectCompany(id,name,stand){
   if(p.ok){const info=statusByCompany.get(String(id))||{};info.rejected=false;statusByCompany.set(String(id),info);render();}
 }
 
+// Статус меняется не только на этой странице: сделку создаёт менеджер в
+// Telegram, а каталог с открытой вкладкой обязан показать бейдж «сделка» сам.
+// Раньше статусы читались один раз при загрузке, то есть только после F5.
+let statusesInFlight=false;
+
 async function loadStatuses(){
-  if(!notesApiEnabled()) return;
+  if(!notesApiEnabled()||statusesInFlight) return;
+  statusesInFlight=true;
   const allIds=EX.map(e=>e.id);
   const BATCH=100;
   let changed=false;
-  for(let i=0;i<allIds.length;i+=BATCH){
-    const ids=allIds.slice(i,i+BATCH);
-    try{
-      const r=await fetch(NOTES_API+'?eventKey='+encodeURIComponent(EVENT_KEY)+'&companyIds='+encodeURIComponent(ids.join(',')));
-      if(!r.ok) continue;
-      const p=await r.json();
-      Object.entries(p.companies||{}).forEach(([id,info])=>{statusByCompany.set(String(id),info);changed=true;});
-    }catch(err){console.warn('note status unavailable',err);break;}
-  }
+  try{
+    for(let i=0;i<allIds.length;i+=BATCH){
+      const ids=allIds.slice(i,i+BATCH);
+      try{
+        const r=await fetch(NOTES_API+'?eventKey='+encodeURIComponent(EVENT_KEY)+'&companyIds='+encodeURIComponent(ids.join(',')));
+        if(!r.ok) continue;
+        const p=await r.json();
+        Object.entries(p.companies||{}).forEach(([id,info])=>{
+          // Перерисовываем только когда статус реально изменился: полный render()
+          // на каждом опросе сбрасывал бы скролл и разметку у открытой страницы.
+          const prev=statusByCompany.get(String(id));
+          if(prev&&prev.hasDeal===info.hasDeal&&prev.rejected===info.rejected&&prev.noteCount===info.noteCount) return;
+          statusByCompany.set(String(id),info);
+          changed=true;
+        });
+      }catch(err){console.warn('note status unavailable',err);break;}
+    }
+  } finally { statusesInFlight=false; }
   if(changed) render();
+}
+
+function startStatusRefresh(){
+  if(!notesApiEnabled()) return;
+  setInterval(()=>{ if(!document.hidden) loadStatuses(); },60000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) loadStatuses(); });
 }
 
 function getLetterKey(name){
@@ -400,7 +425,7 @@ function render(){
         (e.b?'<div class="company-desc">'+esc(e.b)+'</div>':'')+
         '<div class="company-meta">'+
           (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'" target="_blank" rel="noopener">Checko</a>':'ИНН не найден')+
-          (CATALOG_BASE&&e.href?' <a class="catalog-link" href="'+CATALOG_BASE+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
+          (e.href?' <a class="catalog-link" href="'+(CATALOG_BASE&&!/^https?:\/\//i.test(e.href)?CATALOG_BASE:'')+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
           (e.w?' <a class="catalog-link" href="'+esc(getSiteUrl(e.w,''))+'" target="_blank" rel="noopener">Сайт</a>':'')+
         '</div>';
       if(e.rev!=null){
@@ -413,7 +438,7 @@ function render(){
       const cardNotes=(statusByCompany.get(String(e.id))||{}).notes||[];
       if(cardNotes.length){html+='<div class="card-notes">'+cardNotes.map(n=>'<div class="card-note-item">'+esc((n.text||'').substring(0,150))+((n.text||'').length>150?'…':'')+'</div>').join('')+'</div>';}
       const tgPayload=encodeURIComponent(EVENT_KEY+'_deal_'+e.id);
-      const tgLink='https://t.me/cmr_management_bot?start='+tgPayload;
+      const tgLink='https://t.me/'+TG_BOT+'?start='+tgPayload;
       const canReject=st!=='reject'&&st!=='deal';
       const isRejected=st==='reject';
       html+='<div class="card-actions">'+
@@ -478,11 +503,14 @@ function openNotePopup(id,name,stand){
   if(notesApiEnabled()){
     fetch(NOTES_API+'?eventKey='+encodeURIComponent(EVENT_KEY)+'&companyId='+encodeURIComponent(id))
       .then(r=>r.json()).then(p=>{
-        const notes=(p.company||{}).notes||[];
+        // GET по одной компании отдаёт {ok, preleadId, notes:[…], status:{…}} —
+        // notes лежат на верхнем уровне. Раньше читалось p.company.notes, чего в
+        // ответе нет: попап всегда показывался пустым, даже когда заметки были.
+        const notes=(p.notes||(p.company||{}).notes||[]);
         const div=document.getElementById('notePopupNotes');
         if(notes.length){
           div.innerHTML='<div class="popup-divider">Заметки</div><div class="popup-notes">'+
-            notes.map(n=>'<div class="popup-note-item">'+esc(n.text||'')+'<div class="popup-note-time">'+(n.ts?new Date(n.ts).toLocaleString('ru'):'')+'</div></div>').join('')+'</div>';
+            notes.map(n=>'<div class="popup-note-item">'+esc(n.text||'')+'<div class="popup-note-time">'+((n.createdAt||n.ts)?new Date(n.createdAt||n.ts).toLocaleString('ru'):'')+'</div></div>').join('')+'</div>';
         }
       }).catch(()=>{});
   }
@@ -556,4 +584,5 @@ document.querySelectorAll('[data-prof]').forEach(b=>b.addEventListener('click',f
 loadFilters();
 render();
 loadStatuses();
+startStatusRefresh();
 </script>

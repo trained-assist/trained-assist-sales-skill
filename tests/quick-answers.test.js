@@ -73,3 +73,78 @@ test('expo project type has the core TYPES schema', () => {
   assert.ok(t.prefixes.includes('выставка'));
   assert.ok(Array.isArray(t.dirs) && t.seedFiles['EVENT.md'] && t.profile);
 });
+
+// ── Команды CRM ──────────────────────────────────────────────────────────────
+//
+// Быстрый ответ по контракту ядра синхронный и без сети, поэтому сюда попадает
+// только локальная проверка токена. Сами вызовы Weeek уходят в агента.
+
+function crmProfile({ token } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sales-quick-crm-'));
+  const prevTokens = process.env.AGENT_TOKENS_DIR;
+  const prevUser = process.env.USER_ID;
+  process.env.AGENT_TOKENS_DIR = dir;
+  process.env.USER_ID = 'u1';
+  fs.mkdirSync(path.join(dir, 'u1'), { recursive: true });
+  if (token) fs.writeFileSync(path.join(dir, 'u1', 'weeek'), 'fake-token');
+  return {
+    dir,
+    restore() {
+      if (prevTokens === undefined) delete process.env.AGENT_TOKENS_DIR;
+      else process.env.AGENT_TOKENS_DIR = prevTokens;
+      if (prevUser === undefined) delete process.env.USER_ID;
+      else process.env.USER_ID = prevUser;
+    },
+  };
+}
+
+test('команда CRM отвечается и без expo-pipeline', () => {
+  const p = crmProfile({ token: true });
+  try {
+    // Регрессия: общий гейт «нет пайплайна — не наше» делал ответ недостижимым.
+    assert.equal(fs.existsSync(path.join(p.dir, 'expo-pipeline')), false);
+    const out = getQuickAnswer('/deals', { workDir: p.dir });
+    assert.equal(typeof out, 'string');
+    assert.match(out, /CRM/);
+  } finally { p.restore(); }
+});
+
+test('без токена CRM честно говорит, что не подключена', () => {
+  const p = crmProfile();
+  try {
+    assert.match(getQuickAnswer('/deals', { workDir: p.dir }), /не подключена/);
+    assert.match(getQuickAnswer('CRM подключена?', { workDir: p.dir }), /токена нет/);
+  } finally { p.restore(); }
+});
+
+test('с токеном — список команд, а не обещание', () => {
+  const p = crmProfile({ token: true });
+  try {
+    const out = getQuickAnswer('/deals', { workDir: p.dir });
+    assert.match(out, /\/deals/);
+    assert.match(out, /\/add_status/);
+    assert.match(out, /\/preleads/);
+  } finally { p.restore(); }
+});
+
+test('свободный текст не перехватывается — уходит в агента', () => {
+  const p = crmProfile({ token: true });
+  try {
+    for (const task of [
+      'добавь контакт Иван +7 900 000',
+      'создай сделку на Эксимпак',
+      'кинь визитку в сделку',
+      'поменяй статус на Вызвано',
+    ]) {
+      assert.equal(getQuickAnswer(task, { workDir: p.dir }), null, task);
+    }
+  } finally { p.restore(); }
+});
+
+test('ответ про CRM не зависит от наличия выставки', () => {
+  const p = crmProfile({ token: true });
+  try {
+    // Профиль без expo-pipeline: ответ обязан работать, это не про выставку.
+    assert.equal(getQuickAnswer('есть ли доступ к CRM', { workDir: p.dir }).includes('подключена'), true);
+  } finally { p.restore(); }
+});

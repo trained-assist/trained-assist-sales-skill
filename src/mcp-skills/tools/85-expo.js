@@ -269,11 +269,12 @@ function toCSV(entries) {
 
 module.exports = {
   isReady: isExpoEnabled,
-  setupTools: ['expo_enable'],
+  setupTools: ['expo_enable_skills'],
   tools: {
 
-    expo_enable: {
-      description: 'Активирует скилы выставочного пайплайна (Expo + Flexi). После активации доступны: expo_find_participants, expo_classify_targets, expo_pipeline_*, flexi_* и другие инструменты для работы с выставками.',
+    expo_enable_skills: {
+      description: 'Включить набор скилов выставочного пайплайна (Expo + Flexi). После активации доступны: expo_find_participants, expo_classify_targets, expo_pipeline_*, flexi_* и другие инструменты для работы с выставками.\n\n' +
+        'Это включает режим/инструменты, а НЕ выбирает выставку. Чтобы выбрать, с какой выставкой работать, используй flexi_set_active_exhibition(event_key).',
       inputSchema: { type: 'object', properties: {} },
       handler: async () => {
         const flagDir = path.dirname(require('../expo-paths.js').expoFlagPath());
