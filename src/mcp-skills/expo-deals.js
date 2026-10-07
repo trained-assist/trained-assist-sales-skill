@@ -26,6 +26,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomBytes } = require('crypto');
 
 // В пределах проекта expoDataDir не различает выставки, поэтому eventKey входит
 // в имя файла: иначе две выставки одного проекта делили бы одну привязку.
@@ -45,9 +46,46 @@ function readBinding(dir, eventKey, companyId) {
 
 function writeBinding(dir, eventKey, companyId, binding) {
   const file = bindingFile(dir, eventKey, companyId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(binding, null, 2), 'utf8');
+  const parent = path.dirname(file);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  fs.chmodSync(parent, 0o700);
+  const temp = `${file}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+  let fd;
+  try {
+    fd = fs.openSync(temp, 'wx', 0o600);
+    fs.writeFileSync(fd, JSON.stringify(binding, null, 2), 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    fs.renameSync(temp, file);
+    const dirFd = fs.openSync(parent, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(temp); } catch {}
+  }
   return file;
+}
+
+// The file itself is the cross-process claim. O_EXCL makes two simultaneous
+// handlers choose exactly one creator before either dispatches to Weeek.
+function claimBinding(dir, eventKey, companyId, binding) {
+  const file = bindingFile(dir, eventKey, companyId);
+  const parent = path.dirname(file);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  fs.chmodSync(parent, 0o700);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'wx', 0o600);
+    fs.writeFileSync(fd, JSON.stringify(binding, null, 2), 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd); fd = undefined;
+    const dirFd = fs.openSync(parent, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    return true;
+  } catch (error) {
+    if (error?.code === 'EEXIST') return false;
+    throw error;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
 function clearBinding(dir, eventKey, companyId) {
@@ -69,4 +107,4 @@ function listBindings(dir) {
   return out;
 }
 
-module.exports = { bindingFile, readBinding, writeBinding, clearBinding, listBindings };
+module.exports = { bindingFile, readBinding, writeBinding, claimBinding, clearBinding, listBindings };

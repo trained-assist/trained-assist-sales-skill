@@ -16,7 +16,7 @@ const { notesApiUrl, notesHealthUrl } = require('../notes-api.js');
 // Идентичность компании и разбор deep-link живут в expo-ids.js — тем же
 // контрактом пользуются генератор каталога и его проверка на сборке.
 const { parseDeepLink } = require('../expo-ids.js');
-const { readBinding, writeBinding, clearBinding, listBindings } = require('../expo-deals.js');
+const { readBinding, writeBinding, claimBinding, clearBinding, listBindings } = require('../expo-deals.js');
 const { tokensRoot } = require('../../data-paths.js');
 const { readCredentialFile } = require('../../credential-store.js');
 // Контракт обязательных полей (G7) живёт в 30-weeek.js — рядом с create_deal.
@@ -515,12 +515,13 @@ module.exports = {
             type: 'string',
             description: 'ИНН компании, если в данных выставки его нет (найди через company_find_by_name / Checko).',
           },
-          user_id: { type: 'string' },
         },
       },
-      handler: async ({ payload, event_key, company_id, contact_name, company_inn, user_id }, ctx) => {
+      handler: async ({ payload, event_key, company_id, contact_name, company_inn }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
-        const uid = user_id || process.env.USER_ID || '';
+        // Profile identity comes from the trusted invocation context, never a
+        // model-supplied tool argument.
+        const uid = ctx?.userId || process.env.USER_ID || '';
 
         let eventKey = clean(event_key);
         let companyId = clean(company_id);
@@ -675,10 +676,28 @@ module.exports = {
         // ответ потеряется, следующий вызов увидит незакрытую операцию и не
         // создаст вторую сделку.
         const opId = `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeBinding(dir, eventKey, companyId, {
+        const claimed = claimBinding(dir, eventKey, companyId, {
           event_key: eventKey, company_id: companyId, company_name: company.n,
           state: 'creating', op_id: opId, started_at: new Date().toISOString(),
         });
+        if (!claimed) {
+          const raced = readBinding(dir, eventKey, companyId);
+          if (raced?.state === 'created' && raced.deal_id) {
+            const mark = await markDealOnSite({ eventKey, companyId,
+              companyName: company.n, dealId: raced.deal_id });
+            return { ok: true, existing_deal: true, event_key: eventKey,
+              company_id: companyId, company_name: company.n, deal_id: raced.deal_id,
+              created_at: raced.created_at || null,
+              site_status: mark.ok ? 'synced' : 'sync_failed',
+              ...(mark.ok ? {} : { site_status_error: mark.error }),
+              message: `Сделка уже создана (${raced.deal_id}) — вторую не создаю.` };
+          }
+          return { ok: false, code: 'DEAL_CREATE_IN_PROGRESS', event_key: eventKey,
+            company_id: companyId, company_name: company.n,
+            started_at: raced?.started_at || null,
+            error: `По компании ${company.n} уже создаётся сделка. Повторный вызов не создаст вторую.`,
+            hint: 'Проверь flexi_sync_deal_status или найди сделку в Weeek перед повтором.' };
+        }
 
         // Контракт результата (sales-skill#19, C4): внешний ok:true допустим
         // только при подтверждённом успехе. Различаем «Weeek отказал» и

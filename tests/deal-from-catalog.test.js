@@ -207,7 +207,7 @@ test('handler доходит до контракта полей, а не пад�
   const workDir = tmpWorkDir();
 
   const { out } = await withFetch(t, url => url.includes('site-predeal-notes') ? jsonResponse(NOTES_OK) : jsonResponse({}, 500),
-    () => TOOL.tools.flexi_deal_from_catalog.handler({ payload: 'rosupack2026_deal_415', user_id: 'u1' }, { workDir }));
+    () => TOOL.tools.flexi_deal_from_catalog.handler({ payload: 'rosupack2026_deal_415' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.code, 'DEAL_MISSING_REQUIRED_FIELDS');
@@ -219,6 +219,59 @@ test('handler доходит до контракта полей, а не пад�
   assert.equal(out.notes_attached, 1);
 });
 
+test('profile identity comes from trusted context; a tool argument cannot select another profile', async t => {
+  const tokens = stubProfile(t);
+  const attacker = path.join(tokens, 'attacker');
+  fs.mkdirSync(attacker, { recursive: true });
+  fs.writeFileSync(path.join(attacker, 'weeek'), 'attacker-token');
+  fs.writeFileSync(path.join(attacker, 'weeek-refs.json'), JSON.stringify({ statuses: { Лид: 'attacker-status' } }));
+  const workDir = tmpWorkDir();
+  const { out, calls } = await withFetch(t,
+    url => url.includes('site-predeal-notes') ? jsonResponse(NOTES_OK) : jsonResponse({ deal: { id: 'deal-trusted' } }),
+    () => TOOL.tools.flexi_deal_from_catalog.handler(
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'attacker' },
+      { workDir, userId: 'u1' }));
+
+  assert.equal(TOOL.tools.flexi_deal_from_catalog.inputSchema.properties.user_id, undefined);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  const create = calls.find(c => c.url.includes('api.weeek.net'));
+  assert.match(create.url, /status-lead/);
+  assert.doesNotMatch(create.url, /attacker-status/);
+});
+
+test('simultaneous deal requests claim one binding before either calls Weeek', async t => {
+  stubProfile(t);
+  const workDir = tmpWorkDir();
+  let noteReads = 0;
+  let releaseReads;
+  const bothReadNotes = new Promise(resolve => { releaseReads = resolve; });
+  const results = await withFetch(t, async (url, opts) => {
+    if (url.includes('site-predeal-notes') && opts.method !== 'POST') {
+      noteReads++;
+      if (noteReads === 2) releaseReads();
+      await bothReadNotes;
+      return jsonResponse(NOTES_OK);
+    }
+    if (url.includes('site-predeal-notes')) return jsonResponse({ ok: true, markedAt: '2026-10-06T00:00:00.000Z' });
+    return jsonResponse({ deal: { id: 'deal-once' } });
+  }, async () => Promise.all([
+    TOOL.tools.flexi_deal_from_catalog.handler(
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }),
+    TOOL.tools.flexi_deal_from_catalog.handler(
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }),
+  ]));
+
+  const creates = results.calls.filter(c => c.url.includes('api.weeek.net'));
+  assert.equal(creates.length, 1, 'only one concurrent invocation may dispatch deal creation');
+  assert.equal(results.out.filter(out => out.ok).length, 1);
+  assert.equal(results.out.filter(out => out.code === 'DEAL_CREATE_IN_PROGRESS' || out.existing_deal).length, 1);
+  const binding = JSON.parse(fs.readFileSync(path.join(BINDING_DIR(workDir), 'rosupack2026__415.json'), 'utf8'));
+  assert.equal(binding.state, 'created');
+  assert.equal(binding.deal_id, 'deal-once');
+  assert.equal(fs.statSync(BINDING_DIR(workDir)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(BINDING_DIR(workDir), 'rosupack2026__415.json')).mode & 0o777, 0o600);
+});
+
 test('контакт, названный агентом, завершает путь до сделки в Weeek', async t => {
   stubProfile(t, { refs: { statuses: { Лид: 'status-lead' }, deal_fields: { deal_comment: 'cf-comment' } } });
   const workDir = tmpWorkDir();
@@ -226,7 +279,7 @@ test('контакт, названный агентом, завершает пу
   const { out, calls } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse(NOTES_OK) : jsonResponse({ deal: { id: 'deal-77' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, true, JSON.stringify(out));
   assert.equal(out.deal.id, 'deal-77');
@@ -251,7 +304,7 @@ test('ИНН, которого нет в данных выставки, аген
   const { out, calls } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ...NOTES_OK, notes: [] }) : jsonResponse({ deal: { id: 'deal-78' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_416', contact_name: 'Пётр Сидоров', company_inn: '9909887766', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_416', contact_name: 'Пётр Сидоров', company_inn: '9909887766' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, true, JSON.stringify(out));
   const post = calls.find(c => c.url.includes('api.weeek.net'));
@@ -269,7 +322,7 @@ test('ошибка Weeek не выдаётся за «сделка создан�
   const { out } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse(NOTES_OK) : jsonResponse({ error: 'deal is invalid' }, 400),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.code, 'DEAL_CREATE_FAILED');
@@ -288,7 +341,7 @@ test('неясный ответ Weeek не превращается в повт�
       throw e;
     })(),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.code, 'DEAL_CREATE_OUTCOME_UNKNOWN');
@@ -311,7 +364,7 @@ test('буквенный id из каталога находит свою ком
   const { out, calls } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ...NOTES_OK, notes: [] }) : jsonResponse({ deal: { id: 'deal-99' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'cpmautumn2026_deal_13C57', contact_name: 'ЛПР', user_id: 'u1' }, { workDir }));
+      { payload: 'cpmautumn2026_deal_13C57', contact_name: 'ЛПР' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, true, JSON.stringify(out));
   assert.equal(out.company_name, 'ДРУГАЯ КОМПАНИЯ');
@@ -326,7 +379,7 @@ test('уже созданная сделка не создаётся второ�
   const { out, calls } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ...NOTES_OK, hasDeal: true }) : jsonResponse({ deal: { id: 'x' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.has_deal, true);
@@ -342,7 +395,7 @@ test('отказ на карточке блокирует создание сд�
       ? jsonResponse({ ok: true, notes: [], status: { rejected: true, rejectionReason: 'отказ' }, hasDeal: false })
       : jsonResponse({ deal: { id: 'x' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.rejected, true);
@@ -364,7 +417,7 @@ test('созданная сделка записывается в привязк
       ? jsonResponse({ ok: true, notes: [], status: { rejected: false }, hasDeal: false })
       : jsonResponse({ deal: { id: 'deal-100' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, true, JSON.stringify(out));
   assert.equal(out.deal_id, 'deal-100');
@@ -390,7 +443,7 @@ test('повторный вызов возвращает ту же сделку 
       ? jsonResponse({ ok: true, notes: [], status: { rejected: false }, hasDeal: false })
       : jsonResponse({ deal: { id: 'deal-100' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
   assert.equal(first.out.ok, true);
 
   const second = await withFetch(t,
@@ -398,7 +451,7 @@ test('повторный вызов возвращает ту же сделку 
       ? jsonResponse({ ok: true, notes: [], status: { rejected: false }, hasDeal: true })
       : jsonResponse({ deal: { id: 'deal-SECOND' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(second.out.ok, true);
   assert.equal(second.out.existing_deal, true);
@@ -420,7 +473,7 @@ test('незакрытая операция не даёт создать вто�
   const { out, calls } = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ok: true, notes: [] }) : jsonResponse({ deal: { id: 'x' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   assert.equal(out.ok, false);
   assert.equal(out.code, 'DEAL_CREATE_IN_PROGRESS');
@@ -439,7 +492,7 @@ test('сбой записи статуса не отменяет сделку и
       return jsonResponse({ ok: true, notes: [], status: { rejected: false }, hasDeal: false });
     },
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
 
   // Сделка создана — это главное. Статус не записан — это отдельная проблема.
   assert.equal(out.ok, true, JSON.stringify(out));
@@ -452,7 +505,7 @@ test('сбой записи статуса не отменяет сделку и
     url => url.includes('site-predeal-notes')
       ? jsonResponse({ ok: true, alreadyMarked: false, markedAt: new Date().toISOString() })
       : jsonResponse({ deal: { id: 'deal-SHOULD-NOT-HAPPEN' } }),
-    () => TOOL.tools.flexi_sync_deal_status.handler({ event_key: 'rosupack2026' }, { workDir }));
+    () => TOOL.tools.flexi_sync_deal_status.handler({ event_key: 'rosupack2026' }, { workDir, userId: 'u1' }));
 
   assert.equal(sync.out.ok, true, JSON.stringify(sync.out));
   assert.equal(sync.out.synced, 1);
@@ -468,7 +521,7 @@ test('синхронизация без привязки не создаёт с�
   const workDir = tmpWorkDir();
   const { out } = await withFetch(t,
     url => jsonResponse({ ok: true, notes: [] }),
-    () => TOOL.tools.flexi_sync_deal_status.handler({ event_key: 'rosupack2026' }, { workDir }));
+    () => TOOL.tools.flexi_sync_deal_status.handler({ event_key: 'rosupack2026' }, { workDir, userId: 'u1' }));
   assert.equal(out.ok, true);
   assert.equal(out.synced, 0);
   assert.match(out.message, /нечего/);
@@ -481,7 +534,7 @@ test('явный отказ Weeek снимает операцию и позво�
   const first = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ok: true, notes: [] }) : jsonResponse({ error: 'bad' }, 400),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
   assert.equal(first.out.ok, false);
   assert.equal(first.out.code, 'DEAL_CREATE_FAILED');
   assert.equal(fs.existsSync(path.join(BINDING_DIR(workDir), 'rosupack2026__415.json')), false,
@@ -490,7 +543,7 @@ test('явный отказ Weeek снимает операцию и позво�
   const second = await withFetch(t,
     url => url.includes('site-predeal-notes') ? jsonResponse({ ok: true, notes: [] }) : jsonResponse({ deal: { id: 'deal-OK' } }),
     () => TOOL.tools.flexi_deal_from_catalog.handler(
-      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров', user_id: 'u1' }, { workDir }));
+      { payload: 'rosupack2026_deal_415', contact_name: 'Иван Петров' }, { workDir, userId: 'u1' }));
   assert.equal(second.out.ok, true, JSON.stringify(second.out));
   assert.equal(second.out.deal_id, 'deal-OK');
 });
