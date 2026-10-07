@@ -22,4 +22,4 @@ npm test
 
 Do not duplicate this domain in core or create two implementations for UI/MCP. API/UI access and run-local tools follow [shared boundaries](https://github.com/trained-assist/trained-agent-architecture/blob/main/ARCHITECTURE.md). Plans/status: [issues](https://github.com/trained-assist/trained-assist-sales-skill/issues).
 
-Retiring GCP VM is not a development or fallback target. Use the own Agent Run API and serverless by default; a necessary persistent service belongs on the existing French VM. Other Google services remain allowed. Exit coordination: https://github.com/trained-assist/trained-agent-architecture/issues/145.
+Retiring GCP VM is not a development or fallback target. Choose hosting per service architecture and owning decision. HH cold-search hosting and sequencing are tracked in https://github.com/trained-assist/trained-assist-hh-skill/issues/187, under the architecture exit plan at https://github.com/trained-assist/trained-agent-architecture/issues/145; do not assume a French VM or serverless target. Other Google services remain allowed.
