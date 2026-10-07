@@ -13,6 +13,27 @@ const EXPO_STATUS_INTENT    = /статус.{0,20}(?:пайплайн|pipeline|�
 const EXPO_SITE_CONFIG_INTENT = /фильтр.{0,20}(?:сайт|каталог|выставк|диапазон)|сайт.{0,20}фильтр|диапазон.{0,20}(?:выручк|сайт)|настройк.{0,20}(?:сайт|каталог)|какие.{0,10}диапазон|revenue.*filter|site.*filter/i;
 
 const pipelineTools = () => require('./mcp-skills/tools/87-expo-pipeline.js');
+const { tokensRoot } = require('./data-paths.js');
+const { readCredentialFile } = require('./credential-store.js');
+
+// Команды CRM, которые читаются локально и не требуют сети. Всё, что пишет в CRM
+// (создание сделки, смена статуса, комментарий), сюда не попадает: быстрый ответ
+// по контракту ядра синхронный и без сети, а значит не может ходить в Weeek.
+const CRM_STATUS_INTENT = /^(?:\/deals|\/preleads|\/new(?:_deal|_partner|_prelead)?|\/add_(?:status|channel|comment)|\/cancel|\/chatid|\/start|\/help)\s*$/i;
+const CRM_CAPABILITY_INTENT = /(?:авторизован|есть.{0,20}(?:доступ|токен|подключени).{0,20}crm|crm.{0,20}(?:доступ|токен|подключен)|weeek.{0,20}(?:доступ|токен|подключен)|подключен.{0,20}crm)/i;
+
+/**
+ * Есть ли в профиле токен CRM. Локальное чтение файла, без сети.
+ *
+ * Профиль берётся из process.env.USER_ID: ядро зовёт getQuickAnswer без userId
+ * (intent-engine.js:616), так что это единственный источник — как в 30-weeek.js.
+ */
+function crmTokenPresent() {
+  try {
+    const dir = path.join(tokensRoot(), String(process.env.USER_ID || ''));
+    return fs.existsSync(path.join(dir, 'weeek'));
+  } catch { return false; }
+}
 
 function pipelineStatus(pipelineBase) {
   const dirs = fs.readdirSync(pipelineBase, { withFileTypes: true }).filter(e => e.isDirectory());
@@ -36,6 +57,14 @@ function pipelineStatus(pipelineBase) {
 
 function getQuickAnswer(task, { workDir, sessionExists } = {}) {
   if (!task || !workDir) return null;
+
+  // Команды CRM не про выставку: они читают токен из профиля и не требуют
+  // expo-pipeline. Раньше стоял общий гейт «нет пайплайна — не наше», и ответы
+  // про CRM были недостижимы в профиле без выставки.
+  if (CRM_CAPABILITY_INTENT.test(task) || CRM_STATUS_INTENT.test(task)) {
+    return crmQuickAnswer(task);
+  }
+
   const pipelineBase = path.join(workDir, 'expo-pipeline');
   // Every answer below is about this profile's expo pipeline — no pipeline, not ours.
   if (!fs.existsSync(pipelineBase)) return null;
@@ -59,10 +88,30 @@ function getQuickAnswer(task, { workDir, sessionExists } = {}) {
   try {
     if (EXPO_STATUS_INTENT.test(task)) return pipelineStatus(pipelineBase);
   } catch (e) { console.error('[sales-quick] expo status error:', e.message); }
+
   return null;
+}
+
+/**
+ * Быстрый ответ на команду CRM. Только локальное чтение токена: по контракту
+ * ядра быстрый ответ синхронный и без сети, поэтому сами вызовы Weeek сюда не
+ * попадают — они уходят в агента через crm_deals_commands.
+ */
+function crmQuickAnswer(task) {
+  const connected = crmTokenPresent();
+  const list = '/deals, /new_deal, /add_status, /add_comment, /preleads, /add_channel, /cancel';
+  if (CRM_CAPABILITY_INTENT.test(task)) {
+    return connected
+      ? `Да, CRM подключена — токен на месте. Команды сделок выполняю: ${list}. Напиши команду или просто что нужно сделать.`
+      : `CRM не подключена: токена нет. Подключи CRM (weeek_set_token), и команды сделок заработают: ${list}.`;
+  }
+  return connected
+    ? `Команды сделок выполняю через CRM. Скажи, что именно: ${list} — или просто опиши действие.`
+    : `CRM не подключена, поэтому команды сделок сейчас не выполнятся. Подключи CRM (weeek_set_token) — и ${list} заработают.`;
 }
 
 module.exports = {
   getQuickAnswer,
   EXPO_CAPABILITY_INTENT, EXPO_CRITERIA_INTENT, EXPO_STATUS_INTENT, EXPO_SITE_CONFIG_INTENT,
+  CRM_CAPABILITY_INTENT, CRM_STATUS_INTENT, crmTokenPresent,
 };

@@ -316,12 +316,18 @@ const DEAL_TYPES = ['direct', 'partner'];
 // Кастомные поля сделки, которые мы заполняем. Имена — схема; ID — привязка в
 // профиле (weeek_set_refs читает /crm/custom-fields). Без привязки значение
 // молча не легло бы в сделку: Weeek ждёт customFields по ID поля, а не по имени.
+//
+// input — имя, под которым значение приходит от вызывающего; key — роль в
+// профиле. Они различаются у ИНН: контракт обязательных полей зовёт его
+// company_inn (так его называют данные выставки и create_deal), а роль в
+// профиле — inn. Без input значение молча терялось: поле было обязательным в
+// валидации и не попадало ни в customFields, ни в блок «поля без привязки».
 const DEAL_FIELD_ROLES = [
   { key: 'source', label: 'Источник сделки' },
   { key: 'deal_type', label: 'Тип сделки' },
   { key: 'stand', label: 'Стенд' },
   { key: 'hall', label: 'Зал' },
-  { key: 'inn', label: 'ИНН' },
+  { key: 'inn', label: 'ИНН', input: 'company_inn' },
   { key: 'deal_comment', label: 'Комментарий' },
   { key: 'contact_name', label: 'Контактное лицо' },
   { key: 'tg_chat_id', label: 'Telegram-чат' },
@@ -645,7 +651,8 @@ module.exports = {
         const fields = { ...(custom_fields || {}) };
         const unmapped = [];
         for (const role of DEAL_FIELD_ROLES) {
-          const value = input[role.key];
+          const raw = role.input ? input[role.input] : input[role.key];
+          const value = role.input && raw == null ? input[role.key] : raw;
           if (value == null || String(value).trim() === '') continue;
           const fieldId = refs?.deal_fields?.[role.key];
           if (fieldId) fields[fieldId] = value;

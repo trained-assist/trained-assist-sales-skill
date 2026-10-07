@@ -21,7 +21,7 @@
       "steps": [
         {
           "title": "Проверить все предусловия и записать их в gates-report.md",
-          "instructions": "Проверь по порядку и запиши КАЖДЫЙ пункт строкой «<гейт>: ok|missing» в файл gates-report.md в корне рабочей директории (создай/перезапиши):\n1) секции skills.json профиля `flexi-expo` и `crm-weeek` включены — иначе expo_*/flexi_*/weeek_* скрыты (canary #1537);\n2) существует флаг `contexts/expo/.enabled` — без него все expo_* гейтятся isExpoEnabled();\n3) Weeek L1-токен установлен (weeek_status / weeek_set_token) — сделки, задачи, контакты, удаление;\n4) Weeek L2-сессия (/connect/weeek, логин+пароль) — нужна ТОЛЬКО для weeek_add_comment к сделке; если нет — строка «weeek_l2: missing», это не блокирует остальное;\n5) env агента содержит FLEXI_BOT_SECRET и FLEXI_API_URL (проверка: flexi_status → api_reachable);\n6) для НОВОЙ выставки: eventKey в шаблоне сайта (EVENT_KEY='eventnameyear'), eventKey в ALLOWED_ORIGINS и mapping в flexi-telegram-deal-bot, есть telegram_companies.json; для существующей — строка «event_key: ok (rosupack2026 и т.п.)».\nКритический гейт (п.1, 2, 3, 5) со статусом missing — не продолжай: сообщи владельцу, что именно включить, и остановись. Некритичные (L2, новый eventKey) зафиксируй и иди дальше.",
+          "instructions": "Проверь по порядку и запиши КАЖДЫЙ пункт строкой «<гейт>: ok|missing» в файл gates-report.md в корне рабочей директории (создай/перезапиши):\n1) секции skills.json профиля `flexi-expo` и `crm-weeek` включены — иначе expo_*/flexi_*/weeek_* скрыты (canary #1537);\n2) существует флаг `contexts/expo/.enabled` — без него все expo_* гейтятся isExpoEnabled();\n3) Weeek L1-токен установлен (weeek_status / weeek_set_token) — сделки, задачи, контакты, удаление;\n4) Weeek L2-сессия (/connect/weeek, логин+пароль) — нужна ТОЛЬКО для weeek_add_comment к сделке; если нет — строка «weeek_l2: missing», это не блокирует остальное;\n5) env агента содержит FLEXI_BOT_SECRET и FLEXI_API_URL (проверка: flexi_status → api_reachable);\n6) для НОВОЙ выставки: event_key передан в expo_build_catalog — подстановки EVENT_KEY/NOTES_API/бота делает он, руками в HTML ничего не правим; id компаний уникальные и link-safe, сборка сама падает на повторах и негодных id; для существующей выставки — строка «event_key: ok (rosupack2026 и т.п.)».\nКритический гейт (п.1, 2, 3, 5) со статусом missing — не продолжай: сообщи владельцу, что именно включить, и остановись. Некритичные (L2, новый eventKey) зафиксируй и иди дальше.",
           "execution_kind": "agent",
           "executor_role": "verifier",
           "minimum_model_level": "bachelor",
@@ -33,10 +33,10 @@
         },
         {
           "title": "Машино-проверка: API заметок жив и Weeek-токен на месте",
-          "instructions": "Две детерминированные проверки без оценки моделью: /health воркера заметок отвечает 2xx и лежит сохранённый Weeek-токен. Если упала первая — FLEXI_API_URL/деплой воркера, вторая — weeek_set_token.",
+          "instructions": "Две детерминированные проверки без оценки моделью: /health воркера заметок отвечает 2xx и лежит сохранённый Weeek-токен. Если упала первая — FLEXI_NOTES_API_URL/деплой воркера, вторая — weeek_set_token.",
           "execution_kind": "programmatic",
           "validation": {
-            "http_ok": "https://flexi-telegram-deal-bot.skillset-apply.workers.dev/health",
+            "http_ok": "https://flexi-site-notes.skillset-apply.workers.dev/health",
             "credential_present": "weeek"
           }
         }
@@ -260,7 +260,7 @@
       "steps": [
         {
           "title": "C1. Deep-link с карточки ведёт в бота",
-          "instructions": "С карточки сайта «✈ Создать сделку» → deep-link вида https://t.me/cmr_management_bot?start=<eventKey>_deal_<companyId>. Проверить, что eventKey и companyId совпадают с карточкой.",
+          "instructions": "С карточки сайта «✈ Создать сделку» → deep-link вида https://t.me/<bot>?start=<eventKey>_deal_<companyId>, где бот — подстановка TG_BOT в собранном каталоге (по умолчанию cmr_management_bot, задаётся параметром tg_bot при сборке). Проверить, что бот и eventKey совпадают с параметрами сборки, а companyId — с id карточки (id буквенный у большинства выставок: 13C56, LNG001, OL001, hex — не число). Разобрать его можно только flexi_deal_from_catalog(payload); руками в HTML ничего не правим.",
           "execution_kind": "agent",
           "executor_role": "developer",
           "minimum_model_level": "bachelor",

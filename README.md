@@ -1,39 +1,25 @@
 # trained-assist-sales-skill
 
-**GCP VM exit (05.10.2026):** New work on `alesa-personal-assistent/us-central1-a/alesa-vm` is prohibited. Choose hosting per service architecture and owning decision. HH cold-search hosting and sequencing are tracked in [issue #187](https://github.com/trained-assist/trained-agent-architecture/issues/187), under the [architecture exit plan](https://github.com/trained-assist/trained-agent-architecture/issues/145); do not assume a French VM or serverless target. Other Google services remain allowed.
+Sales/CRM и company/INN domain capabilities. Одна бизнес-реализация используется платформенными adapters; наличие инструмента не разрешает отправку/мутацию без scope и effect policy.
+
+Документы содержат действующие требования, контракты и инструкции. Планы выполнения, статусы, ревью прошлых версий и evidence ведутся в GitHub issues/PR/Project. Целевая модель не является утверждением о текущем deployment; его готовность проверяется по конкретным SHA и приёмке.
+
+## Sources
+
+- `src/mcp-skills/tools/` — Weeek, company/INN, DaData/Checko и exhibition/Flexi tools.
+- `src/prompt-domains/` — scoped domain instructions.
+- `playbooks/exhibition-catalog-to-sales-site.json` — доменный playbook artifact.
+
+Host supplies authenticated profile, credential binding, paths/artifact refs and capability eligibility. Compatibility file-store readers remain source-defined; they are not permission to expose host credentials to a Run. Scheduler availability is checked via the configured backend, not an old issue's “lands later” claim.
 
 
-Sales / CRM domain skill of [trained-assist-agent](https://github.com/trained-assist/trained-assist-agent) (epic #1470).
-Mounted by core as the `sales-skills` MCP sibling: core's `deploy.sh` checks it out next to the
-release (after the MCP contract check), `src/browser.js` adds it to each session's `.mcp.json`,
-and core reads `src/prompt-domains/*.md` for the prompt rules.
+Credential readers/writers for company/INN, DaData and Checko share `src/mcp-skills/inn-keys.js`. A user's configured key takes precedence over the platform fallback; legacy reads remain compatibility-only. Setter → reader interoperability and precedence are covered by `tests/unit/keys-one-store.test.js`.
 
-## Contents
-- `30-weeek.js` — Weeek CRM (deals, contacts, tasks, comments)
-- `85-expo.js` … `89-expo-pipeline-run.js`, `92-flexi-sales.js` — exhibition participants → targets → sales catalog (Flexi); `expo-paths.js`, `src/catalog-template/`
-- `40-company.js`, `70-inn-enrichment.js` (+ `src/inn-pipeline/`), `71-dadata.js`, `72-checko.js` — company / INN data (also used by recruiting)
-- `src/prompt-domains/` — `weeek`, `weeek.setup`, `expo`, `flexi-sales`
-- `playbooks/exhibition-catalog-to-sales-site.json` — единый плейбук продаж на выставке
-  (гейты → пайплайн «ссылка → сайт» → приёмка → сделки из визитки → рабочий цикл → ограничения).
-  Core резолвит его как sibling-плейбук (нужен `trained-assist-sales-skill` в
-  `DEFAULT_SIBLING_REPOS`, trained-assist-agent#1728); контракт проверяет
-  `scripts/check-playbook-contract.js` в CI.
-
-Profile skills: core's catalog addresses these modules as `sales-skills/<file>`; the registry
-skips modules listed in `SKILLS_RESOLVED` → `hidden.modules`.
-
-Scheduling: `expo_pipeline_run auto_cron` reports "schedules unavailable" until core's
-cron-service lands (trained-assist-agent#1489); then use core's provider jobs API.
-
-## Develop
 ```bash
-npm run check   # every tool module loads
-npm test        # offline unit tests
+npm run check
+npm test
 ```
-Credentials stay on the platform side: the Weeek token is collected by core (`/connect/weeek`,
-`/settoken weeek`) into `~/agent-tokens/<profile>/weeek`; this skill only reads it.
 
-## Claude Code Instructions
-- One copy of the domain code lives here; core must not keep copies.
-- Tool files export `{ tools, isReady?, setupTools? }`; keep tool names stable (core prompts refer to them).
-- Every outbound HTTP call needs a timeout; token files are written with mode `0o600`.
+Do not duplicate this domain in core or create two implementations for UI/MCP. API/UI access and run-local tools follow [shared boundaries](https://github.com/trained-assist/trained-agent-architecture/blob/main/ARCHITECTURE.md). Plans/status: [issues](https://github.com/trained-assist/trained-assist-sales-skill/issues).
+
+Retiring GCP VM is not a development or fallback target. Choose hosting per service architecture and owning decision. HH cold-search hosting and sequencing are tracked in https://github.com/trained-assist/trained-agent-architecture/issues/187, under the architecture exit plan at https://github.com/trained-assist/trained-agent-architecture/issues/145; do not assume a French VM or serverless target. Other Google services remain allowed.
