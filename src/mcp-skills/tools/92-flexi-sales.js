@@ -21,6 +21,8 @@ const { tokensRoot } = require('../../data-paths.js');
 const { readCredentialFile } = require('../../credential-store.js');
 // Контракт обязательных полей (G7) живёт в 30-weeek.js — рядом с create_deal.
 const { validateDealInput } = require('./30-weeek.js');
+// Shared event source contract for deal tools and validation.
+const { EVENT_NAMES } = require('../../sales/exhibitions');
 
 // Адрес API заметок — из notes-api.js, тем же, что подставляется в собираемый
 // каталог. Раньше дефолт стоял здесь, а в шаблоне каталога был зашит другой
@@ -115,14 +117,6 @@ async function apiDelete(params) {
 function resolveEventKey(event_key) {
   return clean(event_key) || activeEventKey();
 }
-
-const EVENT_NAMES = {
-  rosupack2026: 'RosUpack 2026', stonefair2026: 'Индустрия камня 2026',
-  oborot2026: 'ECOM Expo 2026', reindustry2026: 'ReIndustry Expo 2026',
-  interautomechanica2026: 'ИнтерАвтоМеханика 2026', avtobusexpo2026: 'АвтобусЭкспо 2026',
-  ipsa2026: 'IPSA 2026', cpmautumn2026: 'CPM Осень 2026',
-  textilesalon2026: 'Textile Salon 2026', otdykhleisure2026: 'ОТДЫХ Leisure 2026',
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 
