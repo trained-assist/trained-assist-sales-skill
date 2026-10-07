@@ -85,6 +85,10 @@ describe('catalog-template/index.html', () => {
 // ── expo_build_catalog ────────────────────────────────────────────────────────
 
 describe('expo_build_catalog', () => {
+  it('does not expose a bypass for nonfunctional Telegram links', () => {
+    expect(expo_build_catalog.inputSchema.properties.allow_unsafe_ids).toBeUndefined();
+  });
+
   it('returns error when no enriched.json', async () => {
     const r = await expo_build_catalog.handler(
       { expo_id: 'nonexistent', event_key: 'test2026', expo_title: 'Test Expo 2026' },
@@ -218,7 +222,7 @@ describe('expo_build_catalog', () => {
       { id: '13C56', name: 'СОСЕДНИЙ УЧАСТНИК', inn: '7709887766', okved: '14.12', rev: 100, ru: 1, country: 'Россия', stand: '13C56' },
     ]);
     const r = await expo_build_catalog.handler(
-      { expo_id: 'test-expo', event_key: 'cpmautumn2026', expo_title: 'CPM Осень 2026' },
+      { expo_id: 'test-expo', event_key: 'cpmautumn2026', expo_title: 'CPM Осень 2026', allow_unsafe_ids: true },
       ctx()
     );
     expect(r.ok).toBeFalsy();
@@ -238,14 +242,11 @@ describe('expo_build_catalog', () => {
     );
     expect(r.ok).toBeFalsy();
     expect(r.unsafe_ids.map(u => u.id).sort()).toEqual(['13C18/13D19', '13С11']);
-    expect(r.error).toMatch(/непригодных для ссылки/);
-    // Обход предлагается, а не делается молча.
-    expect(r.workaround).toMatch(/allow_unsafe_ids=true/);
+    expect(r.error).toMatch(/непригодных id/);
+    expect(r.outputPath).toBeUndefined();
   });
 
-  // Обход нужен для существующих выставок: id из CPM уже стоят в заметках
-  // посетителей, молчаливая перенумерация потеряла бы их привязку.
-  it('allow_unsafe_ids собирает каталог, но повтор id всё равно запрещён', async () => {
+  it('не публикует каталог с непередаваемыми Telegram ID даже при старом workaround-параметре', async () => {
     makeEnriched([
       { id: '13C18/13D19', name: 'ДВА СТЕНДА', inn: '7743421876', okved: '14.12', rev: 500, ru: 1, country: 'Россия', stand: '13C18/13D19' },
       { id: '13С11', name: 'КИРИЛЛИЧЕСКАЯ С', inn: '7709887766', okved: '14.12', rev: 100, ru: 1, country: 'Россия', stand: '13С11' },
@@ -254,20 +255,45 @@ describe('expo_build_catalog', () => {
       { expo_id: 'test-expo', event_key: 'cpmautumn2026', expo_title: 'CPM Осень 2026', allow_unsafe_ids: true },
       ctx()
     );
-    expect(r.ok).toBe(true);
-    expect(r.unsafe_ids_count).toBe(2);
+    expect(r.ok).toBeFalsy();
+    expect(r.unsafe_ids).toHaveLength(2);
+    expect(r.outputPath).toBeUndefined();
 
-    // С дубликатом id обход не помогает: это тихая порча сделок.
+    // Повтор ID также блокирует запись каталога.
     makeEnriched([
       { id: '13C56', name: 'ПЕРВАЯ', inn: '7743421876', okved: '14.12', rev: 500, ru: 1, country: 'Россия', stand: '13C56' },
       { id: '13C56', name: 'ВТОРАЯ', inn: '7709887766', okved: '14.12', rev: 100, ru: 1, country: 'Россия', stand: '13C56' },
     ]);
     const dup = await expo_build_catalog.handler(
-      { expo_id: 'test-expo', event_key: 'cpmautumn2026', expo_title: 'CPM Осень 2026', allow_unsafe_ids: true },
+      { expo_id: 'test-expo', event_key: 'cpmautumn2026', expo_title: 'CPM Осень 2026' },
       ctx()
     );
     expect(dup.ok).toBeFalsy();
     expect(dup.duplicate_ids[0].id).toBe('13C56');
+  });
+
+  it('rejects a catalog when the complete Telegram start parameter exceeds 64 characters', async () => {
+    makeEnriched([
+      { id: 'x', name: 'SHORT ID', inn: '7743421876', okved: '14.12', rev: 500, ru: 1, country: 'Россия', stand: 'A1' },
+    ]);
+    const r = await expo_build_catalog.handler(
+      { expo_id: 'test-expo', event_key: 'a'.repeat(58), expo_title: 'Long event key' },
+      ctx()
+    );
+    expect(r.ok).toBeFalsy();
+    expect(r.payload_too_long[0].length).toBe(65);
+    expect(r.outputPath).toBeUndefined();
+  });
+
+  it('rejects event keys outside the deep-link and data-path alphabet', async () => {
+    makeEnriched(SAMPLE_COMPANIES);
+    const r = await expo_build_catalog.handler(
+      { expo_id: 'test-expo', event_key: 'test.event', expo_title: 'Test Expo' },
+      ctx()
+    );
+    expect(r.ok).toBeFalsy();
+    expect(r.invalid_event_key).toBe(true);
+    expect(r.outputPath).toBeUndefined();
   });
 
   it('accepts expo URL as expo_id', async () => {

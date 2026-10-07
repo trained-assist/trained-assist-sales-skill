@@ -10,7 +10,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parseDeepLink, isLinkSafeId, findIdProblems } = require('../src/mcp-skills/expo-ids.js');
+const {
+  parseDeepLink,
+  isLinkSafeId,
+  isTelegramStartParameterSafe,
+  findIdProblems,
+} = require('../src/mcp-skills/expo-ids.js');
 
 test('годные id из реальных каталогов разбираются', () => {
   const good = [
@@ -35,7 +40,7 @@ test('id из реального каталога, который Telegram не 
   assert.equal(parseDeepLink('cpmautumn2026_deal_' + cyrillic), null);
 
   // Компания на нескольких стендах: id склеен из стенда.
-  for (const id of ['13C18/13D19', '13A19, 13A11', '14 B80', '15A42 / 15A46', '____________']) {
+  for (const id of ['13C18/13D19', '13A19, 13A11', '14 B80', '15A42 / 15A46', '____________', 'company.id']) {
     assert.equal(isLinkSafeId(id), false, id);
     assert.equal(parseDeepLink('cpmautumn2026_deal_' + id), null, id);
   }
@@ -48,6 +53,18 @@ test('eventKey остаётся строгим: он идёт в путь на �
   ]) {
     assert.equal(parseDeepLink(bad), null, bad);
   }
+});
+
+test('Telegram start-параметр соблюдает алфавит и предел 64 символа', () => {
+  assert.equal(isTelegramStartParameterSafe('A-z_09'), true);
+  assert.equal(isTelegramStartParameterSafe('company.id'), false);
+  assert.equal(isTelegramStartParameterSafe('a'.repeat(64)), true);
+  assert.equal(isTelegramStartParameterSafe('a'.repeat(65)), false);
+  assert.equal(parseDeepLink('rosupack2026_deal_company.id'), null);
+  assert.equal(parseDeepLink('a'.repeat(58) + '_deal_x'), null);
+  assert.deepEqual(parseDeepLink('a'.repeat(57) + '_deal_x'), {
+    eventKey: 'a'.repeat(57), companyId: 'x',
+  });
 });
 
 test('findIdProblems находит повтор id между компаниями одного стенда', () => {
@@ -81,4 +98,16 @@ test('findIdProblems не падает на пустом и битом вход�
     const r = findIdProblems(input);
     assert.ok(r && Array.isArray(r.duplicates) && Array.isArray(r.unsafe));
   }
+});
+
+test('findIdProblems checks the complete Telegram parameter, not just the company id', () => {
+  const exact = findIdProblems([{ id: 'x', n: 'A' }], 'a'.repeat(57));
+  assert.equal(exact.payloadTooLong.length, 0);
+
+  const tooLong = findIdProblems([{ id: 'x', n: 'A' }], 'a'.repeat(58));
+  assert.equal(tooLong.payloadTooLong.length, 1);
+  assert.equal(tooLong.payloadTooLong[0].length, 65);
+
+  const invalidEventKey = findIdProblems([{ id: 'x', n: 'A' }], 'event.key');
+  assert.equal(invalidEventKey.invalidEventKey, true);
 });

@@ -30,11 +30,19 @@
 // Стенд — атрибут карточки, а не идентификатор компании: на одном стенде
 // бывает несколько участников, и стенд приходит из данных выставки
 // («13C18/13D19», кириллические литеры, несколько номеров через запятую).
-const LINK_SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const LINK_SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const MAX_TELEGRAM_START_PARAM_LENGTH = 64;
+const EVENT_KEY_RE = /^[a-z0-9][a-z0-9-]*$/i;
 
 /** Годится ли id для Telegram deep-link и для поиска компании в данных. */
 function isLinkSafeId(id) {
   return LINK_SAFE_ID_RE.test(String(id ?? ''));
+}
+
+function isTelegramStartParameterSafe(payload) {
+  const value = String(payload ?? '');
+  return value.length >= 1 && value.length <= MAX_TELEGRAM_START_PARAM_LENGTH &&
+    /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 /**
@@ -50,24 +58,27 @@ function isLinkSafeId(id) {
  * первый _deal_ и требуем от companyId допустимый набор символов. Разбирать
  * «жадным» способом нельзя: eventKey подчёркиваний не содержит.
  */
-const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_([A-Za-z0-9][A-Za-z0-9_.-]*)$/i;
+const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_([A-Za-z0-9][A-Za-z0-9_-]*)$/i;
 
 /**
  * @returns {{ eventKey: string, companyId: string }|null}
  */
 function parseDeepLink(payload) {
   const m = String(payload || '').trim().match(DEEP_LINK_RE);
-  if (!m) return null;
+  if (!m || !isTelegramStartParameterSafe(m[0])) return null;
   return { eventKey: m[1], companyId: m[2] };
 }
 
 /**
  * Проблемы идентичности в наборе компаний — для падения на сборке каталога.
- * @returns {{ duplicates: Array, unsafe: Array }}
+ * @returns {{ duplicates: Array, unsafe: Array, payloadTooLong: Array, invalidEventKey: boolean }}
  */
-function findIdProblems(companies) {
+function findIdProblems(companies, eventKey) {
   const seen = new Map();
   const duplicates = [];
+  const payloadTooLong = [];
+  const checkPayloads = eventKey !== undefined;
+  const invalidEventKey = checkPayloads && !EVENT_KEY_RE.test(String(eventKey ?? ''));
   for (const c of companies || []) {
     const id = String(c?.id ?? '');
     if (seen.has(id)) {
@@ -77,11 +88,25 @@ function findIdProblems(companies) {
     } else {
       seen.set(id, c?.n || c?.name || '');
     }
+    if (!invalidEventKey && checkPayloads) {
+      const payload = `${eventKey}_deal_${id}`;
+      if (payload.length > MAX_TELEGRAM_START_PARAM_LENGTH) {
+        payloadTooLong.push({ id, company: c?.n || c?.name || '', length: payload.length });
+      }
+    }
   }
   const unsafe = (companies || [])
     .filter(c => !isLinkSafeId(c?.id))
     .map(c => ({ id: String(c?.id ?? ''), company: c?.n || c?.name || '' }));
-  return { duplicates, unsafe };
+  return { duplicates, unsafe, payloadTooLong, invalidEventKey };
 }
 
-module.exports = { LINK_SAFE_ID_RE, isLinkSafeId, DEEP_LINK_RE, parseDeepLink, findIdProblems };
+module.exports = {
+  LINK_SAFE_ID_RE,
+  MAX_TELEGRAM_START_PARAM_LENGTH,
+  isLinkSafeId,
+  isTelegramStartParameterSafe,
+  DEEP_LINK_RE,
+  parseDeepLink,
+  findIdProblems,
+};

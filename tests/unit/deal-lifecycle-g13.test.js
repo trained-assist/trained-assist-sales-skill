@@ -95,6 +95,19 @@ describe('deal session store', () => {
     const a = session.createSession({ profile: PROFILE, kind: 'new_deal' });
     const b = session.createSession({ profile: PROFILE, kind: 'batch_intake' });
     const c = session.createSession({ profile: PROFILE, kind: 'new_deal' });
+    // Avoid relying on wall-clock millisecond resolution: persist deliberately
+    // ordered timestamps so the test checks newest-session behavior, not UUID
+    // ordering when several sessions are created within one millisecond.
+    for (const [item, updatedAt] of [
+      [a, '2026-01-01T00:00:00.000Z'],
+      [b, '2026-01-01T00:00:01.000Z'],
+      [c, '2026-01-01T00:00:02.000Z'],
+    ]) {
+      const file = session.sessionPath(PROFILE, item.id);
+      const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+      stored.updated_at = updatedAt;
+      fs.writeFileSync(file, JSON.stringify(stored));
+    }
     expect(session.latestSession(PROFILE, 'batch_intake').id).toBe(b.id);
     expect(session.latestSession(PROFILE, 'new_deal').id).toBe(c.id);
     expect([a.id, b.id, c.id]).toContain(session.latestSession(PROFILE).id);
