@@ -12,14 +12,22 @@
 const fs   = require('fs');
 const path = require('path');
 const { isExpoEnabled, expoDataDir } = require('../expo-paths.js');
+const { notesApiUrl, notesHealthUrl } = require('../notes-api.js');
+// Идентичность компании и разбор deep-link живут в expo-ids.js — тем же
+// контрактом пользуются генератор каталога и его проверка на сборке.
+const { parseDeepLink } = require('../expo-ids.js');
+const { readBinding, writeBinding, claimBinding, clearBinding, listBindings } = require('../expo-deals.js');
 const { tokensRoot } = require('../../data-paths.js');
 const { readCredentialFile } = require('../../credential-store.js');
 // Контракт обязательных полей (G7) живёт в 30-weeek.js — рядом с create_deal.
 const { validateDealInput } = require('./30-weeek.js');
 
-const NOTES_API = process.env.FLEXI_NOTES_API_URL
-  || 'https://flexi-site-notes.skillset-apply.workers.dev/api/site-predeal-notes';
-const HEALTH_URL = NOTES_API.replace('/api/site-predeal-notes', '/health');
+// Адрес API заметок — из notes-api.js, тем же, что подставляется в собираемый
+// каталог. Раньше дефолт стоял здесь, а в шаблоне каталога был зашит другой
+// воркер: инструменты и сайт писали заметки в разные места.
+const notesApi = notesApiUrl();
+const NOTES_API = notesApi;
+const HEALTH_URL = notesHealthUrl();
 
 const FETCH_TIMEOUT_MS = 8000;
 
@@ -122,14 +130,6 @@ const EVENT_NAMES = {
 // Сделка из карточки каталога (sales-skill#19, G9 + G10)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const DEEP_LINK_RE = /^([a-z0-9][a-z0-9-]*)_deal_(\d+)$/i;
-
-function parseDeepLink(payload) {
-  const m = String(payload || '').trim().match(DEEP_LINK_RE);
-  if (!m) return null;
-  return { eventKey: m[1], companyId: m[2] };
-}
-
 /**
  * Привязка ролей к ID Weeek из профиля (weeek_set_refs). Без неё агент не может
  * ни создать сделку в нужной воронке, ни поставить источник — ID опций у каждого
@@ -183,6 +183,22 @@ function notesToText(notes) {
     if (n.at) parts.push(`от ${n.at}`);
     return parts.join(' — ');
   }).join('\n');
+}
+
+/**
+ * Отметка «сделка создана» в API заметок — чтобы каталог показал бейдж.
+ * Отдельная операция, а не часть создания сделки: сбой записи статуса не должен
+ * ни отменять уже созданную сделку, ни провоцировать повторное создание.
+ */
+async function markDealOnSite({ eventKey, companyId, companyName, dealId, hall, stand }) {
+  const data = await apiPost({
+    eventKey, companyId, companyName, dealId, statusAction: 'deal',
+    ...(hall ? { hall } : {}), ...(stand ? { stand } : {}),
+  });
+  if (!data.ok) {
+    return { ok: false, error: data.error || `HTTP ${data.httpStatus}` };
+  }
+  return { ok: true, already_marked: Boolean(data.alreadyMarked), marked_at: data.markedAt || null };
 }
 
 module.exports = {
@@ -490,10 +506,22 @@ module.exports = {
           payload: { type: 'string', description: 'Payload из deep-link: «<eventKey>_deal_<companyId>»' },
           event_key: { type: 'string', description: 'Ключ выставки (если не в payload)' },
           company_id: { type: 'string', description: 'ID компании (если не в payload)' },
+          contact_name: {
+            type: 'string',
+            description: 'Контактное лицо. Обязательное поле сделки, а в данных выставки его нет — ' +
+              'назови контакт и повтори вызов с тем же payload.',
+          },
+          company_inn: {
+            type: 'string',
+            description: 'ИНН компании, если в данных выставки его нет (найди через company_find_by_name / Checko).',
+          },
         },
       },
-      handler: async ({ payload, event_key, company_id }, ctx) => {
+      handler: async ({ payload, event_key, company_id, contact_name, company_inn }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
+        // Profile identity comes from the trusted invocation context, never a
+        // model-supplied tool argument.
+        const uid = ctx?.userId || process.env.USER_ID || '';
 
         let eventKey = clean(event_key);
         let companyId = clean(company_id);
@@ -525,6 +553,40 @@ module.exports = {
           return { error: `Компания ${companyId} не найдена в выставке ${eventKey} (в данных ${companies.length} компаний)` };
         }
 
+        // Привязка карточка → сделка. hasDeal в API заметок защищает только от
+        // следующего нажатия: два одновременных клика и обрыв связи после
+        // успешного ответа Weeek он не ловит, а оба дают вторую сделку.
+        const binding = readBinding(dir, eventKey, companyId);
+        if (binding?.state === 'created' && binding.deal_id) {
+          const mark = await markDealOnSite({ eventKey, companyId, companyName: company.n, dealId: binding.deal_id });
+          return {
+            ok: true,
+            existing_deal: true,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            deal_id: binding.deal_id,
+            created_at: binding.created_at || null,
+            site_status: mark.ok ? 'synced' : 'sync_failed',
+            ...(mark.ok ? {} : { site_status_error: mark.error }),
+            message: `Сделка уже создана (${binding.deal_id}) — вторую не создаю.`,
+          };
+        }
+        if (binding?.state === 'creating') {
+          return {
+            ok: false,
+            code: 'DEAL_CREATE_IN_PROGRESS',
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            started_at: binding.started_at || null,
+            error: `По компании ${company.n} уже идёт создание сделки (начато ${binding.started_at || 'недавно'}). ` +
+              'Повторный вызов не создаст вторую сделку и ждать не нужно.',
+            hint: 'Проверь результат: flexi_sync_deal_status (покажет, записалась ли сделка) ' +
+              'или weeek_list_deals по названию компании.',
+          };
+        }
+
         // Заметки и статус — с сайта каталога.
         const notesData = await apiGet({ eventKey, companyId });
         if (!notesData.ok) return { error: `API вернул ошибку: ${notesData.error || notesData.httpStatus}` };
@@ -549,26 +611,36 @@ module.exports = {
           `Создано со страницы каталога ${sourceLabel}.`,
           location ? `Локация: ${location}` : '',
           company.t === 1 ? 'Целевой участник: да' : '',
+          // Данные компании (выручка, директор, сайт, ОКВЭД) — иначе менеджер
+          // получает сделку с названием и без выручки, ради которой пришёл.
+          companyInfoText(company),
           notesToText(notes)
         ].filter(Boolean).join('\n');
 
         const dealInput = {
-          status_id: requireRef(readRefs(sessionUser(ctx)), 'statuses', 'Лид'),
+          status_id: requireRef(readRefs(uid), 'statuses', 'Лид'),
           title: company.n,
           source: sourceLabel,
           // Выставочный лид — прямая продажа; партнёрский тип бот ставил только
           // для партнёрской воронки, а она здесь не привязана.
           deal_type: 'direct',
-          company_inn: company.inn || '',
+          // ИНН в данных выставки есть не у всех (у 74 дублей в CPM его не было
+          // вовсе) — агент может назвать его из другого источника.
+          company_inn: clean(company_inn) || company.inn || '',
           deal_comment: dealComment,
           // Контактного лица в данных выставки нет — его должен назвать агент.
-          contact_name: '',
+          contact_name: clean(contact_name),
+          user_id: uid || undefined,
         };
 
         // Контракт обязательных полей (G7): неполные данные — не сделка с
-        // дырявыми полями, а явный запрос недостающего. Агент дополняет и повторяет.
+        // дырявыми полями, а явный запрос недостающего. Агент дополняет и повторяет
+        // ТОТ ЖЕ вызов с теми же payload/event_key/company_id плюс недостающими
+        // полями — состояние собирается заново из данных выставки, поэтому
+        // переживает и перезапуск сессии.
         const check = validateDealInput(dealInput);
         if (!check.ok) {
+          const canSupply = missing => missing.filter(f => f !== 'status_id');
           return {
             ok: false,
             code: check.code,
@@ -580,6 +652,14 @@ module.exports = {
             stand: company.s || null,
             hall: company.hall || null,
             notes_attached: notes.length,
+            // Что именно передать в следующем вызове — иначе агент не знает,
+            // чем заполнить дыру, и повторяет вызов без него вечно.
+            next_call: {
+              payload: payload || null,
+              event_key: eventKey,
+              company_id: companyId,
+              ...Object.fromEntries(canSupply(check.missing || []).map(f => [f, `<${f}>`])),
+            },
             draft: {
               status_id: dealInput.status_id,
               title: dealInput.title,
@@ -592,7 +672,88 @@ module.exports = {
         }
 
         const weeek = require('./30-weeek.js');
-        const result = await weeek.tools.weeek_create_deal.handler(dealInput, ctx);
+        // Помечаем «создаётся» ДО похода в Weeek: если процесс упадёт или
+        // ответ потеряется, следующий вызов увидит незакрытую операцию и не
+        // создаст вторую сделку.
+        const opId = `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const claimed = claimBinding(dir, eventKey, companyId, {
+          event_key: eventKey, company_id: companyId, company_name: company.n,
+          state: 'creating', op_id: opId, started_at: new Date().toISOString(),
+        });
+        if (!claimed) {
+          const raced = readBinding(dir, eventKey, companyId);
+          if (raced?.state === 'created' && raced.deal_id) {
+            const mark = await markDealOnSite({ eventKey, companyId,
+              companyName: company.n, dealId: raced.deal_id });
+            return { ok: true, existing_deal: true, event_key: eventKey,
+              company_id: companyId, company_name: company.n, deal_id: raced.deal_id,
+              created_at: raced.created_at || null,
+              site_status: mark.ok ? 'synced' : 'sync_failed',
+              ...(mark.ok ? {} : { site_status_error: mark.error }),
+              message: `Сделка уже создана (${raced.deal_id}) — вторую не создаю.` };
+          }
+          return { ok: false, code: 'DEAL_CREATE_IN_PROGRESS', event_key: eventKey,
+            company_id: companyId, company_name: company.n,
+            started_at: raced?.started_at || null,
+            error: `По компании ${company.n} уже создаётся сделка. Повторный вызов не создаст вторую.`,
+            hint: 'Проверь flexi_sync_deal_status или найди сделку в Weeek перед повтором.' };
+        }
+
+        // Контракт результата (sales-skill#19, C4): внешний ok:true допустим
+        // только при подтверждённом успехе. Различаем «Weeek отказал» и
+        // «не знаем, создалась ли» — иначе неясный ответ приводит либо к
+        // потерянной сделке, либо к дубликату при повторе.
+        let result;
+        try {
+          result = await weeek.tools.weeek_create_deal.handler(dealInput, ctx);
+        } catch (e) {
+          const uncertain = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+          // При явном отказе операцию снимаем — повторять безопасно. При
+          // неясном ответе оставляем: создание могло пройти, и повтор вслепую
+          // дал бы вторую сделку.
+          if (!uncertain) clearBinding(dir, eventKey, companyId);
+          return {
+            ok: false,
+            code: uncertain ? 'DEAL_CREATE_OUTCOME_UNKNOWN' : 'DEAL_CREATE_FAILED',
+            // created:false — повторять безопасно; unknown — сначала проверь Weeek.
+            deal_created: uncertain ? 'unknown' : false,
+            error: e.message,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            ...(uncertain
+              ? { hint: 'Ответ Weeek не дошёл. Повторный вызов НЕ создаст вторую сделку: следующий вызов вернёт DEAL_CREATE_IN_PROGRESS. Найди сделку в Weeek (weeek_list_deals по названию) и при необходимости закрой привязку.' }
+              : { hint: 'Сделка не создана, можно исправить данные и повторить.' }),
+          };
+        }
+
+        // Weeek умеет вернуть не исключение, а типизированный контракт G7 — тот
+        // же, что проверяем выше. Не выдаём это за «сделка создана».
+        if (result && result.ok === false) {
+          clearBinding(dir, eventKey, companyId);
+          return {
+            ...result,
+            deal_created: false,
+            event_key: eventKey,
+            company_id: companyId,
+            company_name: company.n,
+            next_call: { payload: payload || null, event_key: eventKey, company_id: companyId,
+              ...Object.fromEntries((result.missing || []).filter(f => f !== 'status_id').map(f => [f, `<${f}>`])) },
+          };
+        }
+
+        const dealId = result?.id || result?.dealId || result?.deal?.id || null;
+        const createdAt = new Date().toISOString();
+        writeBinding(dir, eventKey, companyId, {
+          event_key: eventKey, company_id: companyId, company_name: company.n,
+          state: 'created', op_id: opId, deal_id: dealId, created_at: createdAt,
+        });
+
+        // Каталог должен увидеть сделку. Сбой записи статуса — это отдельная
+        // операция (flexi_sync_deal_status), а не повод создавать сделку снова.
+        const mark = dealId
+          ? await markDealOnSite({ eventKey, companyId, companyName: company.n, dealId })
+          : { ok: false, error: 'Weeek не вернул id сделки — отметить статус на сайте нечем' };
 
         return {
           ok: true,
@@ -602,7 +763,84 @@ module.exports = {
           stand: company.s || null,
           hall: company.hall || null,
           notes_attached: notes.length,
+          deal_id: dealId,
           deal: result,
+          site_status: mark.ok ? 'synced' : 'sync_failed',
+          ...(mark.ok ? {} : { site_status_error: mark.error, next_tool: 'flexi_sync_deal_status' }),
+        };
+      },
+    },
+
+    flexi_sync_deal_status: {
+      description:
+        'Дописать статус «сделка» на сайт каталога для уже созданных сделок.\n\n' +
+        'Создание сделки и запись статуса на сайте — разные операции: сделка может быть создана, ' +
+        'а статус не записан (сбой сети, воркер был недоступен). Этот тул повторяет ТОЛЬКО запись статуса ' +
+        'и никогда не создаёт сделку заново.\n\n' +
+        'Без company_id проходит по всем привязкам выставки — удобно после перезапуска, чтобы закрыть хвосты.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          event_key: { type: 'string', description: 'Ключ выставки (по умолчанию активная)' },
+          company_id: { type: 'string', description: 'ID компании. Не указан — проходит по всем привязкам выставки' },
+          force: { type: 'boolean', description: 'Перезаписать статус даже если он уже записан', default: false },
+        },
+      },
+      handler: async ({ event_key, company_id, force = false }, ctx) => {
+        const workDir = ctx?.workDir || process.cwd();
+        const eventKey = resolveEventKey(event_key);
+        if (!eventKey) return { error: 'Выставка не выбрана. Вызови flexi_set_active_exhibition.' };
+
+        const dir = expoDataDir(workDir, eventKey);
+        const wanted = clean(company_id);
+        const bindings = wanted
+          ? [readBinding(dir, eventKey, wanted)].filter(Boolean)
+          : listBindings(dir);
+
+        if (!bindings.length) {
+          return {
+            ok: true, synced: 0, event_key: eventKey,
+            message: wanted
+              ? `По компании ${wanted} нет созданной сделки — синхронизировать нечего.`
+              : 'В выставке нет ни одной созданной сделки — синхронизировать нечего.',
+          };
+        }
+
+        const done = [];
+        const failed = [];
+        for (const b of bindings) {
+          if (b.state !== 'created' || !b.deal_id) {
+            failed.push({ company_id: b.company_id, error: `состояние «${b.state}» — сделка не подтверждена` });
+            continue;
+          }
+          if (b.site_marked_at && !force) {
+            done.push({ company_id: b.company_id, deal_id: b.deal_id, status: 'уже отмечена' });
+            continue;
+          }
+          const mark = await markDealOnSite({
+            eventKey: b.event_key, companyId: b.company_id,
+            companyName: b.company_name, dealId: b.deal_id,
+          });
+          if (mark.ok) {
+            writeBinding(dir, b.event_key, b.company_id, {
+              ...b, site_marked_at: mark.marked_at || new Date().toISOString(),
+            });
+            done.push({ company_id: b.company_id, deal_id: b.deal_id, status: mark.already_marked ? 'уже была' : 'отмечена' });
+          } else {
+            failed.push({ company_id: b.company_id, deal_id: b.deal_id, error: mark.error });
+          }
+        }
+
+        return {
+          ok: failed.length === 0,
+          event_key: eventKey,
+          synced: done.length,
+          failed: failed.length,
+          ...(done.length ? { done } : {}),
+          ...(failed.length ? { failed } : {}),
+          message: failed.length
+            ? `Статус записан для ${done.length}, не записан для ${failed.length}. Повтори тул — сделки он не создаёт.`
+            : `Статус «сделка» записан на сайте: ${done.length}.`,
         };
       },
     },

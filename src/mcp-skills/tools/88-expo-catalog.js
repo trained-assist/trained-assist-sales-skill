@@ -3,8 +3,16 @@
 const fs = require('fs');
 const path = require('path');
 const { expoDataDir, expoDeployDir, isExpoEnabled } = require('../expo-paths.js');
+const { notesApiUrl, notesApiLiteral } = require('../notes-api.js');
+const { findIdProblems } = require('../expo-ids.js');
 
 const TEMPLATE_PATH = path.join(__dirname, '../../catalog-template/index.html');
+
+// Telegram-бот, в которого открывается deep-link «Создать сделку». Тоже
+// подстановка, а не константа в шаблоне: аудитория sales переезжает на штатный
+// шлюз (issue #19, шаг «переключение»), и собранный ранее каталог должен
+// уметь уехать вместе с ним, без ручной правки HTML.
+const DEFAULT_TG_BOT = 'cmr_management_bot';
 
 function slugify(url) {
   try {
@@ -61,11 +69,13 @@ Parameters:
           favicon_emoji: { type: 'string', description: 'Browser tab emoji', default: '🌸' },
           out_dir:       { type: 'string', description: 'Output directory (default: expo pipeline dir)' },
           use_targets:   { type: 'boolean', description: 'Use targets.json instead of enriched.json', default: false },
+          tg_bot:        { type: 'string', description: 'Telegram username, в котором открывается deep-link «Создать сделку» (без @)', default: 'cmr_management_bot' },
+          allow_unsafe_ids: { type: 'boolean', description: 'Собрать каталог, даже если часть id нельзя передать в Telegram-ссылку (повторы id при этом всё равно запрещены)', default: false },
           production_okved: { type: 'array', items: { type: 'string' }, description: 'ОКВЭД-префиксы производства для классификации t:1/nt:1. Default: ["13.","14."] (текстиль). Для цветов: ["01.","16.","20.","22.","23.","25.","26.","27.","28.","32."]' },
         },
       },
 
-      handler: async ({ expo_id, event_key, expo_title, expo_date = '', catalog_base = '', favicon_emoji = '🌸', out_dir, use_targets = false, production_okved }, ctx) => {
+      handler: async ({ expo_id, event_key, expo_title, expo_date = '', catalog_base = '', favicon_emoji = '🌸', out_dir, use_targets = false, tg_bot = DEFAULT_TG_BOT, production_okved, allow_unsafe_ids = false }, ctx) => {
         const workDir = ctx?.workDir || process.cwd();
 
         const id = expo_id.startsWith('http') ? slugify(expo_id) : expo_id;
@@ -134,13 +144,68 @@ Parameters:
 
         // Inject all placeholders
         const exJson = JSON.stringify(exArray);
+        const notesApi = notesApiUrl();
+        const tgBot = String(tg_bot || DEFAULT_TG_BOT).trim().replace(/^@/, '');
         html = html
           .replace(/\{\{EXPO_TITLE\}\}/g, expo_title)
           .replace(/\{\{EVENT_KEY\}\}/g, event_key)
           .replace(/\{\{CATALOG_BASE\}\}/g, catalog_base)
           .replace(/\{\{FAVICON_EMOJI\}\}/g, favicon_emoji)
           .replace(/\{\{EXPO_DATE\}\}/g, expo_date)
+          .replace(/\{\{TG_BOT_USERNAME\}\}/g, tgBot)
+          // JSON-литерал: адрес попадает в JS-код страницы, а не в текст.
+          .replace(/\{\{NOTES_API\}\}/g, notesApiLiteral())
           .replace('{{EX_JSON}}', exJson);
+
+        // Неопределённая подстановка в собранном HTML — это каталог, который
+        // пишет заметки мимо или показывает сырой плейсхолдер пользователю.
+        // Ловим здесь, а не «на глаз у посетителя выставки».
+        const left = [...html.matchAll(/\{\{([A-Z_]+)\}\}/g)].map(m => m[1]);
+        if (left.length) {
+          return {
+            error: `Шаблон каталога содержит неподставленные плейсхолдеры: ${[...new Set(left)].join(', ')}. ` +
+              'Это баг шаблона — пересобери после правки src/catalog-template/index.html.',
+            unresolved: [...new Set(left)],
+          };
+        }
+        if (!exArray.length) {
+          return {
+            error: `В данных ${path.basename(dataFile)} нет ни одной компании — каталог собирать не из чего.`,
+            data_file: dataFile,
+          };
+        }
+
+        // Идентичность компании проверяется ДО сборки. Оба класса дефектов
+        // ломают сделку, а заметки увидит посетитель выставки: «Создать сделку»
+        // для второй компании на общем стенде создаст чужую сделку, а id с
+        // кириллицей или несколькими стендами не передаётся в ссылке вовсе.
+        const idProblems = findIdProblems(exArray);
+        // Повтор id — всегда стоп: две компании на одном стенде получили бы
+        // один deep-link и одну сделку, причём тихо. Такой обход невозможен
+        // принципиально: показывать каталог значит врать посетителю.
+        //
+        // Непригодный для ссылки id допускает осознанный обход: на существующих
+        // выставках (CPM) такие id уже в данных и в заметках посетителей,
+        // молчаливая перенумерация потеряла бы их привязку. Плата — понятная и
+        // видимая: эти карточки не смогут открыть сделку.
+        if (idProblems.duplicates.length || (idProblems.unsafe.length && !allow_unsafe_ids)) {
+          const where = path.basename(dataFile);
+          return {
+            error: `Идентичность компаний в данных не годится для каталога: ` +
+              `${idProblems.duplicates.length} повторов id, ${idProblems.unsafe.length} непригодных для ссылки. ` +
+              'id обязан быть уникальным на компанию и пригодным для Telegram-ссылки ' +
+              '(латиница, цифры, «_», «-», «.»); стенд — атрибут карточки, а не идентификатор. ' +
+              `Правь ${where} и пересобери.`,
+            data_file: where,
+            duplicate_ids: idProblems.duplicates.slice(0, 20),
+            unsafe_ids: idProblems.unsafe.slice(0, 20),
+            fix: 'Присвой id в данных выставки (устойчивый ключ участника), а стенд оставь в поле stand. ' +
+              'Для быстрой правки: company_get_by_name → уникальный id по ОГРН.',
+            ...(idProblems.unsafe.length && !idProblems.duplicates.length
+              ? { workaround: 'Если эти id уже в заметках посетителей и перенумеровать нельзя — пересобери с allow_unsafe_ids=true: каталог соберётся, но «Создать сделку» на таких карточках работать не будет.' }
+              : {}),
+          };
+        }
 
         // Write output — into the clean deployable dir (deploy/<slug>/ in a project,
         // legacy expo-pipeline/<id>/ otherwise), never the data dir with its inputs.
@@ -160,6 +225,13 @@ Parameters:
           ok: true,
           outputPath,
           size_kb: Math.round(html.length / 1024),
+          // Что именно зашито в собранный HTML: адрес заметок и бота видно сразу,
+          // а не «на странице выставки, где заметки молча уходят не туда».
+          notes_api: notesApi,
+          tg_bot: tgBot,
+          // Сколько карточек не смогут открыть сделку: id нельзя передать в
+          // ссылке. Видно в ответе, а не по жалобам посетителей.
+          unsafe_ids_count: idProblems.unsafe.length,
           stats: {
             total: exArray.length,
             targets: targets.length,
