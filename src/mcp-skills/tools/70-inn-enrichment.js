@@ -7,6 +7,19 @@ const { enrich } = require('../../inn-pipeline/index');
 // One store for DaData/Checko/Rusprofile keys, shared with dadata_*/checko_*/company_*.
 const { readKeys: readConfig, writeKeys: writeConfig } = require('../inn-keys');
 
+function companyKey(company) {
+  return String(company.id ?? company.name ?? '').toLowerCase();
+}
+
+function completed(company) {
+  const status = company?._inn_enrichment?.status;
+  if (status === 'found' || status === 'unresolved' || status === 'low_confidence'
+      || status === 'not_applicable') return true;
+  // Older checkpoints have no status. Only an enrichment-owned provenance marker
+  // proves that the row was processed; a copied source row with an INN does not.
+  return !status && !!(company?.requisites_source || company?.requisites_comment);
+}
+
 module.exports = {
   tools: {
 
@@ -149,6 +162,11 @@ NOTE: Works well for Russian legal entity names. Brand names (Latin, foreign) �
           return { error: 'Нужен file (путь) или companies (массив объектов {name, ...})' };
         }
 
+        const keys = exhibitors.map(companyKey);
+        if (keys.some(key => !key) || new Set(keys).size !== keys.length) {
+          return { error: 'Каждой компании нужен уникальный id или name для безопасного возобновления.' };
+        }
+
         if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
         const enrichedPath = path.join(outDir, 'enriched.json');
@@ -156,37 +174,33 @@ NOTE: Works well for Russian legal entity names. Brand names (Latin, foreign) �
         const reportPath = path.join(outDir, 'requisites_report.json');
 
         // Load existing results for resume
-        let alreadyDone = {};
+        const savedByKey = new Map();
         if (resume) {
           for (const p of [enrichedPath, enrichedAliasPath]) {
             if (fs.existsSync(p)) {
               try {
                 const saved = JSON.parse(fs.readFileSync(p, 'utf8'));
                 const arr = Array.isArray(saved) ? saved : (saved.companies || []);
-                for (const c of arr) {
-                  const key = String(c.id ?? c.name ?? '').toLowerCase();
-                  if (key) alreadyDone[key] = c;
-                }
+                for (const c of arr) if (companyKey(c)) savedByKey.set(companyKey(c), c);
               } catch {}
               break;
             }
           }
         }
 
-        const remaining = exhibitors.filter(c => {
-          const key = String(c.id ?? c.name ?? '').toLowerCase();
-          return !alreadyDone[key];
-        });
+        const remaining = exhibitors.filter(c => !completed(savedByKey.get(companyKey(c))));
 
         const skipped = exhibitors.length - remaining.length;
         if (remaining.length === 0) {
-          const all = Object.values(alreadyDone);
+          const all = exhibitors.map(c => savedByKey.get(companyKey(c)) || c);
+          const withInn = all.filter(c => c.inn).length;
           return {
             ok: true,
             total: exhibitors.length,
-            done: all.length,
+            done: skipped,
             remaining: 0,
             skipped,
+            with_inn: withInn,
             message: `Все ${all.length} компаний уже обогащены. Запусти expo_pipeline_qualify для фильтрации.`,
             enrichedPath,
           };
@@ -207,26 +221,44 @@ NOTE: Works well for Russian legal entity names. Brand names (Latin, foreign) �
         const started = Date.now();
         const log = [];
 
+        // enrich() returns an object keyed by company.id || company.name, not an
+        // array. It omits unresolved rows, so onProgress distinguishes an
+        // attempted row from a row that has never been attempted.
+        const observed = new Map();
+
         const enrichResult = await enrich(batch, config, ({ done, total, company, result }) => {
+          observed.set(companyKey(company), result);
           if (result?.inn) log.push(`✓ ${company.name} → ${result.inn}`);
           else log.push(`✗ ${company.name}`);
         });
-        const batchResults = Array.isArray(enrichResult?.enriched) ? enrichResult.enriched
-          : Array.isArray(enrichResult) ? enrichResult : [];
-
-        // Merge batch results into alreadyDone map
-        for (const c of batchResults) {
-          const key = String(c.id ?? c.name ?? '').toLowerCase();
-          if (key) alreadyDone[key] = c;
+        const found = enrichResult?.enriched;
+        if (!found || typeof found !== 'object' || Array.isArray(found)) {
+          return { error: 'inn-pipeline returned an unexpected enriched result shape.' };
+        }
+        for (const orig of batch) {
+          const key = companyKey(orig);
+          // Older inn-pipeline implementations use name when id is falsy (0).
+          const details = found[String(orig.id || orig.name)] ?? observed.get(key) ?? null;
+          const country = String(orig.country || '').toUpperCase();
+          const isRussian = !country || ['RUS', 'RU', 'РОССИЯ'].includes(country);
+          const status = !isRussian ? 'not_applicable'
+            : details?.requisites_comment === 'bad_match_cleared' ? 'low_confidence'
+            : details?.inn || details?.ogrn || details?.requisites_source ? 'found'
+            : 'unresolved'; // The upstream API cannot yet distinguish no match from outage.
+          savedByKey.set(key, {
+            ...orig,
+            ...(details || {}),
+            id: orig.id,
+            name: orig.name,
+            _inn_enrichment: { status },
+          });
         }
 
-        // Also add back any original company that wasn't enriched (keep raw data)
-        for (const orig of exhibitors) {
-          const key = String(orig.id ?? orig.name ?? '').toLowerCase();
-          if (!alreadyDone[key]) alreadyDone[key] = orig;
-        }
-
-        const allResults = Object.values(alreadyDone);
+        // Keep source rows in the partial catalog, but leave unattempted rows
+        // explicitly pending. Presence in enriched.json is not completion.
+        const allResults = exhibitors.map(orig => savedByKey.get(companyKey(orig)) || {
+          ...orig, _inn_enrichment: { status: 'pending' },
+        });
         const elapsed = Math.round((Date.now() - started) / 1000);
 
         // Save checkpoint — both filenames for compatibility
@@ -236,17 +268,17 @@ NOTE: Works well for Russian legal entity names. Brand names (Latin, foreign) �
 
         // Save simple report
         const withInn = allResults.filter(c => c.inn);
+        const totalDone = allResults.filter(completed).length;
+        const stillRemaining = exhibitors.length - totalDone;
         const report = {
           total: exhibitors.length,
-          enriched: allResults.length,
+          enriched: totalDone,
+          pending: stillRemaining,
           with_inn: withInn.length,
           without_inn: allResults.length - withInn.length,
           generated_at: new Date().toISOString(),
         };
         fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf8');
-
-        const totalDone = allResults.length;
-        const stillRemaining = exhibitors.length - totalDone;
 
         return {
           ok: true,
