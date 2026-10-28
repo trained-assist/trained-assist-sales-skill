@@ -72,6 +72,10 @@ body{background:var(--bg);color:var(--tx);font-family:'PT Sans',sans-serif;font-
 .company-card.has-reject:hover{border-color:#c0392b;opacity:1}
 .company-card.is-target::before{content:'';position:absolute;bottom:0;left:0;width:0;height:0;border-style:solid;border-width:0 0 10px 10px;border-color:transparent transparent var(--tgt) transparent}
 .company-name{font-family:'Montserrat',sans-serif;font-weight:600;font-size:13px;color:var(--tx);line-height:1.3}
+.company-stand{font-size:11px;color:#fff;background:var(--red);padding:2px 6px;border-radius:4px;font-weight:600;display:inline-block;margin:4px 0}
+.company-legal{font-size:11px;color:var(--mu);margin-bottom:2px}
+.company-region{font-size:11px;color:var(--mu);margin-bottom:2px}
+.company-okved{font-size:11px;color:var(--mu);background:var(--lb);padding:1px 5px;border-radius:3px;display:inline-block;margin-top:2px}
 .company-country{font-size:11px;color:var(--mu);margin-top:1px}
 .company-cat{font-family:'Montserrat',sans-serif;font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mu);background:var(--lb);border-radius:3px;padding:1px 5px;margin-top:3px;align-self:flex-start;line-height:1.5}
 .company-brief{font-size:12px;color:var(--mu);line-height:1.35;overflow-wrap:break-word;word-break:break-word}
@@ -420,11 +424,16 @@ function render(){
       let html=(stLabel?'<span class="card-status-badge status-'+st+'">'+stLabel+'</span>':'')+
         (e.t?'<span class="target-badge">ЦЕЛЕВАЯ</span>':'')+(isNear(e)?'<span class="near-badge">ИНТЕРЕС</span>':'')+
         '<div class="company-name">'+esc(e.n)+'</div>'+
+        (e.s?'<div class="company-stand">Стенд: '+esc(e.s)+'</div>':'')+
+        (e.legal_name?'<div class="company-legal">'+esc(e.legal_name)+'</div>':'')+
+        (e.region?'<div class="company-region">📍 '+esc(e.region)+'</div>':'')+
         (e.ru===0&&e.country?'<div class="company-country">'+esc(e.country)+'</div>':'')+
         (e.cat?'<div class="company-cat">'+esc(e.cat)+'</div>':'')+
+        (e.okved?'<div class="company-okved">ОКВЭД: '+esc(e.okved)+'</div>':'')+
         (e.b?'<div class="company-desc">'+esc(e.b)+'</div>':'')+
         '<div class="company-meta">'+
-          (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'" target="_blank" rel="noopener">Checko</a>':'ИНН не найден')+
+          (e.inn?'<span class="catalog-link">ИНН: '+esc(e.inn)+'</span>':'')+
+          (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'" target="_blank" rel="noopener">Checko</a>':'')+
           (e.href?' <a class="catalog-link" href="'+(CATALOG_BASE&&!/^https?:\/\//i.test(e.href)?CATALOG_BASE:'')+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
           (e.w?' <a class="catalog-link" href="'+esc(getSiteUrl(e.w,''))+'" target="_blank" rel="noopener">Сайт</a>':'')+
         '</div>';

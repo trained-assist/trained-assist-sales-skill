@@ -120,6 +120,10 @@ function toExEntry(c, idx, prefix, productionOkved = DEFAULT_PRODUCTION_OKVED) {
     py: c.py || c.prof_year || null,
     dir: c.dir || null,
     dirpos: c.dirpos || null,
+    emp: c.employees || null,
+    okved: c.okved || null,
+    region: c.region || null,
+    legal_name: c.legal_name || null,
     // extra fields for lingerie-style exhibitions
     ...(c.country && c.country !== 'Россия' ? { country: c.country } : {}),
     ...(c.cat ? { cat: c.cat } : {}),
