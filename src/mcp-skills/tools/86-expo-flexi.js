@@ -99,7 +99,10 @@ function classifyCompany(c, productionOkved = DEFAULT_PRODUCTION_OKVED) {
 // ── EX array generation ───────────────────────────────────────────────────────
 
 function toExEntry(c, idx, prefix, productionOkved = DEFAULT_PRODUCTION_OKVED) {
-  const cls = classifyCompany(c, productionOkved);
+  // If t/nt already set (from targets.json), use them — don't reclassify
+  const cls = (c.t !== undefined || c.nt !== undefined)
+    ? { t: c.t ?? 0, nt: c.nt ?? 0 }
+    : classifyCompany(c, productionOkved);
   return {
     id: c.id || `${prefix}${String(idx + 1).padStart(3, '0')}`,
     n: c.name || c.n || '',
