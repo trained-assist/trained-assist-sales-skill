@@ -186,7 +186,7 @@ function notesToText(notes) {
  */
 async function markDealOnSite({ eventKey, companyId, companyName, dealId, hall, stand }) {
   const data = await apiPost({
-    eventKey, companyId, companyName, dealId, statusAction: 'deal',
+    eventKey, companyId, companyName, dealId, statusAction: 'deal', noteText: 'deal_sync',
     ...(hall ? { hall } : {}), ...(stand ? { stand } : {}),
   });
   if (!data.ok) {
@@ -478,7 +478,7 @@ module.exports = {
         if (!eventKey) return { error: 'Выставка не выбрана.' };
 
         const cid = clean(company_id) || companyIdFromStand(stand) || companyIdFromName(company_name);
-        const data = await apiPost({ eventKey, companyId: cid, companyName: company_name, statusAction: 'unreject' });
+        const data = await apiPost({ eventKey, companyId: cid, companyName: company_name, statusAction: 'unreject', noteText: 'unrejecting' });
 
         if (!data.ok) return { error: `API error: ${data.error || JSON.stringify(data)}` };
         return { ok: true, company_id: cid, company_name, message: `Отказ снят с ${company_name}` };

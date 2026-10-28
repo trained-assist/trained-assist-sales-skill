@@ -99,7 +99,10 @@ function classifyCompany(c, productionOkved = DEFAULT_PRODUCTION_OKVED) {
 // ── EX array generation ───────────────────────────────────────────────────────
 
 function toExEntry(c, idx, prefix, productionOkved = DEFAULT_PRODUCTION_OKVED) {
-  const cls = classifyCompany(c, productionOkved);
+  // If t/nt already set (from targets.json), use them — don't reclassify
+  const cls = (c.t !== undefined || c.nt !== undefined)
+    ? { t: c.t ?? 0, nt: c.nt ?? 0 }
+    : classifyCompany(c, productionOkved);
   return {
     id: c.id || `${prefix}${String(idx + 1).padStart(3, '0')}`,
     n: c.name || c.n || '',
@@ -118,12 +121,14 @@ function toExEntry(c, idx, prefix, productionOkved = DEFAULT_PRODUCTION_OKVED) {
     ry: c.ry || c.rev_year || null,
     prof: c.prof || null,
     py: c.py || c.prof_year || null,
-    dir: c.dir || null,
-    dirpos: c.dirpos || null,
+    dir: c.dir || c.director_name || null,
+    dirpos: c.dirpos || c.director_position || null,
     emp: c.employees || null,
-    okved: c.okved || null,
-    region: c.region || null,
+    emp_year: c.employees_year || null,
+    okved: c.okved || c.okved_code || null,
+    region: c.region || c.region_full || null,
     legal_name: c.legal_name || null,
+    tax_data: c.tax_data || null,
     // extra fields for lingerie-style exhibitions
     ...(c.country && c.country !== 'Россия' ? { country: c.country } : {}),
     ...(c.cat ? { cat: c.cat } : {}),
