@@ -8,7 +8,7 @@ const { isBadMatch } = require('./lib/matcher');
 const { enrichViaBfo } = require('./sources/bfo');
 const { enrichViaDadata } = require('./sources/dadata');
 const { egrulLookup } = require('./sources/egrul');
-const { checkoFinances, isQuotaExhausted } = require('./sources/checko');
+const { checkoFinances, checkoCompany, isQuotaExhausted } = require('./sources/checko');
 const { findInnOnSite } = require('./sources/site-scraper');
 const { logCall } = require('./lib/usage-log');
 
@@ -132,6 +132,25 @@ async function enrich(exhibitors, config = {}, onProgress = null) {
       const fin = await checkoFinances(result.inn, checkoKey, cache);
       trackCall('checko', !!(fin && !fin._quota_exhausted), Date.now() - t4, { inn: result.inn });
       if (fin && !fin._quota_exhausted) Object.assign(result, fin);
+    }
+
+    // Phase 4b: Checko company data (employees, taxes, director)
+    if (result.inn && checkoKey && !isQuotaExhausted()) {
+      const needCompany = !result.employees || !result.tax_data || !result.director_name;
+      if (needCompany) {
+        const t4b = Date.now();
+        const co = await checkoCompany(result.inn, checkoKey, cache);
+        trackCall('checko', !!(co && !co._quota_exhausted), Date.now() - t4b, { inn: result.inn, endpoint: 'company' });
+        if (co && !co._quota_exhausted) {
+          if (!result.employees && co.employees) result.employees = co.employees;
+          if (!result.employees_year && co.employees_year) result.employees_year = co.employees_year;
+          if (!result.tax_data && co.tax_data) result.tax_data = co.tax_data;
+          if (!result.director_name && co.director_name) result.director_name = co.director_name;
+          if (!result.director_position && co.director_position) result.director_position = co.director_position;
+          if (!result.okved_code && co.okved_code) result.okved_code = co.okved_code;
+          if (!result.region_full && co.region_full) result.region_full = co.region_full;
+        }
+      }
     }
 
     // Tally stats

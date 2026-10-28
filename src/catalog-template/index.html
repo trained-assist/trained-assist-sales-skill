@@ -433,7 +433,7 @@ function render(){
         (e.b?'<div class="company-desc">'+esc(e.b)+'</div>':'')+
         '<div class="company-meta">'+
           (e.inn?'<span class="catalog-link">ИНН: '+esc(e.inn)+'</span>':'')+
-          (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'" target="_blank" rel="noopener">Checko</a>':'')+
+          (e.ogrn?'<a class="catalog-link" href="https://checko.ru/company/'+esc(e.ogrn)+'#taxes" target="_blank" rel="noopener">Checko</a>':'')+
           (e.href?' <a class="catalog-link" href="'+(CATALOG_BASE&&!/^https?:\/\//i.test(e.href)?CATALOG_BASE:'')+esc(e.href)+'" target="_blank" rel="noopener">Профиль</a>':'')+
           (e.w?' <a class="catalog-link" href="'+esc(getSiteUrl(e.w,''))+'" target="_blank" rel="noopener">Сайт</a>':'')+
         '</div>';
@@ -443,6 +443,26 @@ function render(){
         html+='<div class="card-fin">'+
           '<div class="card-fin-row"><span class="fin-label">Выручка</span><span class="fin-value">'+fmtRev(e.rev)+'</span><span class="fin-year">'+e.ry+'</span></div>'+
           profStr+'</div>';
+      }
+      // Employee count
+      if(e.emp!=null){
+        html+='<div class="card-fin-row"><span class="fin-label">Сотрудники</span><span class="fin-value">'+e.emp+'</span><span class="fin-year">'+(e.emp_year||'')+'</span></div>';
+      }
+      // Tax breakdown
+      if(e.tax_data){
+        const td=e.tax_data;
+        const taxRows=[];
+        if(td.usn) taxRows.push('<div class="card-fin-row"><span class="fin-label">УСН</span><span class="fin-value">'+fmtRev(td.usn)+'</span></div>');
+        if(td.vat) taxRows.push('<div class="card-fin-row"><span class="fin-label">НДС</span><span class="fin-value">'+fmtRev(td.vat)+'</span></div>');
+        if(td.property_tax) taxRows.push('<div class="card-fin-row"><span class="fin-label">Налог на имущество</span><span class="fin-value">'+fmtRev(td.property_tax)+'</span></div>');
+        if(td.pension) taxRows.push('<div class="card-fin-row"><span class="fin-label">Взносы в ПФР</span><span class="fin-value">'+fmtRev(td.pension)+'</span></div>');
+        const totalTax=Object.values(td).reduce((s,v)=>s+(v||0),0);
+        if(totalTax>0) taxRows.push('<div class="card-fin-row"><span class="fin-label">Всего налогов</span><span class="fin-value" style="color:var(--red)">'+fmtRev(totalTax)+'</span></div>');
+        if(e.emp && totalTax>0){
+          const perEmp=totalTax/e.emp;
+          taxRows.push('<div class="card-fin-row"><span class="fin-label">Взносы на 1 сотрудника</span><span class="fin-value">'+fmtRev(Math.round(perEmp))+'</span></div>');
+        }
+        if(taxRows.length) html+='<div class="card-fin">'+taxRows.join('')+'</div>';
       }
       const cardNotes=(statusByCompany.get(String(e.id))||{}).notes||[];
       if(cardNotes.length){html+='<div class="card-notes">'+cardNotes.map(n=>'<div class="card-note-item">'+esc((n.text||'').substring(0,150))+((n.text||'').length>150?'…':'')+'</div>').join('')+'</div>';}
