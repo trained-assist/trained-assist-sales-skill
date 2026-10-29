@@ -167,10 +167,10 @@ body{background:var(--bg);color:var(--tx);font-family:'PT Sans',sans-serif;font-
       <div class="filters-group">
         <div class="filter-row">
           <span class="filter-label">Участники</span>
-          <button class="filter-btn active" data-filter="all">Все (248)</button>
-          <button class="filter-btn" data-filter="ru">Россия (51)</button>
-          <button class="filter-btn target-btn" data-filter="target">Целевые (2)</button>
-          <button class="filter-btn near-btn" data-filter="near">Почти целевые (36)</button>
+          <button class="filter-btn active" data-filter="all" data-label="Все">Все (248)</button>
+          <button class="filter-btn" data-filter="ru" data-label="Россия">Россия (51)</button>
+          <button class="filter-btn target-btn" data-filter="target" data-label="Целевые">Целевые (2)</button>
+          <button class="filter-btn near-btn" data-filter="near" data-label="Почти целевые">Почти целевые (36)</button>
         </div>
         <div class="filter-row">
           <span class="filter-label">Выручка</span>
@@ -367,6 +367,23 @@ function updateFilterHint(){
   if(parts.length){h.innerHTML=parts.join('<br>');h.hidden=false;}
   else{h.hidden=true;}
 }
+// Счётчики в кнопках фильтров должны быть реальными: берутся из EX,
+// а не вшиты в шаблон. Раньше «Целевые (2)» показывал статичное число,
+// пока в данных было больше целевых — посетитель видел ложь без переключения.
+function updateFilterLabels(){
+  const counts={
+    all: EX.length,
+    ru: EX.filter(function(e){return e.ru===1;}).length,
+    target: EX.filter(function(e){return e.t===1;}).length,
+    near: EX.filter(function(e){return e.nt===1;}).length,
+  };
+  document.querySelectorAll('[data-filter]').forEach(function(b){
+    const f=b.dataset.filter;
+    const label=b.dataset.label||b.textContent;
+    b.textContent=label+' ('+counts[f]+')';
+  });
+}
+
 function getFiltered(){
   let list=EX;
   if(fMain==='ru') list=list.filter(e=>e.ru===1);
@@ -612,6 +629,7 @@ document.querySelectorAll('[data-prof]').forEach(b=>b.addEventListener('click',f
 
 loadFilters();
 render();
+updateFilterLabels();
 loadStatuses();
 startStatusRefresh();
 </script>
